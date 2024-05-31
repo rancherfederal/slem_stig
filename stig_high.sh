@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOGFILE="STIG_Findings.log"
+LOGFILE="STIG_Findings_high.log"
 
 # Function to log messages
 log_message() {
@@ -220,6 +220,116 @@ check_uid_0_accounts() {
     fi
 }
 
+# Function to check and comment out "NOPASSWD" or "!authenticate" in /etc/sudoers
+check_sudoers_nopasswd() {
+    echo "Checking /etc/sudoers for NOPASSWD or !authenticate..."
+    sudoers_issues=$(egrep -i '(nopasswd|!authenticate)' /etc/sudoers)
+    if [ -n "$sudoers_issues" ]; then
+        echo "Found NOPASSWD or !authenticate in /etc/sudoers. Commenting out and logging."
+        while IFS= read -r line; do
+            sed -i "s|$line|#$line|g" /etc/sudoers
+            log_message "Commented out in /etc/sudoers: $line"
+        done <<< "$sudoers_issues"
+    else
+        echo "No NOPASSWD or !authenticate found in /etc/sudoers."
+        log_message "No NOPASSWD or !authenticate found in /etc/sudoers."
+    fi
+}
+
+# Function to check if zypper has gpgcheck enabled
+check_zypper_gpgcheck() {
+    echo "Checking if zypper has gpgcheck enabled..."
+    gpgcheck_status=$(grep -i '^gpgcheck' /etc/zypp/zypp.conf)
+    if [[ "$gpgcheck_status" =~ ^gpgcheck[[:space:]]*=[[:space:]]*(0|off|no|false)$ ]]; then
+        echo "gpgcheck is disabled. Enabling gpgcheck..."
+        transactional-update shell <<EOF
+sed -i 's/^gpgcheck[[:space:]]*=.*/gpgcheck = 1/' /etc/zypp/zypp.conf
+exit
+EOF
+        log_message "Enabled gpgcheck in zypper."
+    else
+        echo "gpgcheck is already enabled."
+        log_message "gpgcheck is already enabled."
+    fi
+}
+
+# Function to verify Ctrl-Alt-Delete is not configured to reboot the system
+check_ctrl_alt_del_reboot() {
+    echo "Checking if Ctrl-Alt-Delete is configured to reboot the system..."
+    ctrl_alt_del_status=$(grep -i 'CtrlAltDelBurstAction' /etc/systemd/system.conf)
+    if [[ "$ctrl_alt_del_status" =~ ^CtrlAltDelBurstAction= ]]; then
+        echo "Ctrl-Alt-Delete is configured to reboot the system. Fixing configuration..."
+        transactional-update shell <<EOF
+sed -i 's/^CtrlAltDelBurstAction=.*/#CtrlAltDelBurstAction=none/' /etc/systemd/system.conf
+exit
+EOF
+        log_message "Disabled Ctrl-Alt-Delete reboot configuration."
+    else
+        echo "Ctrl-Alt-Delete is not configured to reboot the system."
+        log_message "Ctrl-Alt-Delete is not configured to reboot the system."
+    fi
+}
+
+# Function to ensure SSHD is set for PermitEmptyPasswords no and PermitUserEnvironment no
+check_sshd_config() {
+    echo "Checking SSHD configuration..."
+    sshd_config_modified=false
+
+    if grep -q "^PermitEmptyPasswords[[:space:]]*yes" /etc/ssh/sshd_config; then
+        echo "Found PermitEmptyPasswords yes in /etc/ssh/sshd_config. Fixing configuration..."
+        transactional-update shell <<EOF
+sed -i 's/^PermitEmptyPasswords[[:space:]]*yes/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+exit
+EOF
+        log_message "Set PermitEmptyPasswords to no in /etc/ssh/sshd_config."
+        sshd_config_modified=true
+    fi
+
+    if grep -q "^PermitUserEnvironment[[:space:]]*yes" /etc/ssh/sshd_config; then
+        echo "Found PermitUserEnvironment yes in /etc/ssh/sshd_config. Fixing configuration..."
+        transactional-update shell <<EOF
+sed -i 's/^PermitUserEnvironment[[:space:]]*yes/PermitUserEnvironment no/' /etc/ssh/sshd_config
+exit
+EOF
+        log_message "Set PermitUserEnvironment to no in /etc/ssh/sshd_config."
+        sshd_config_modified=true
+    fi
+
+    if [ "$sshd_config_modified" = true ]; then
+        echo "Restarting SSHD service to apply changes..."
+        transactional-update shell <<EOF
+systemctl restart sshd
+exit
+EOF
+        log_message "Restarted SSHD service to apply configuration changes."
+    else
+        echo "SSHD configuration is already correct."
+        log_message "SSHD configuration is already correct."
+    fi
+}
+
+# Function to ensure no user account has a blank password or lock the account
+lock_blank_password_accounts() {
+    echo "Checking for user accounts with blank passwords..."
+    blank_password_accounts=$(awk -F: '($2 == "" || $2 == "!!") {print $1}' /etc/shadow)
+    if [ -n "$blank_password_accounts" ]; then
+        echo "Found user accounts with blank passwords: $blank_password_accounts. Locking accounts and logging."
+        while IFS= read -r account; do
+            if [ "$account" == "root" ]; then
+                echo "The root account has a blank password. Please set a new password for root:"
+                passwd root
+                log_message "Prompted user to set a password for root account."
+            else
+                passwd -l $account
+                log_message "Locked user account with blank password: $account"
+            fi
+        done <<< "$blank_password_accounts"
+    else
+        echo "No user accounts with blank passwords found."
+        log_message "No user accounts with blank passwords found."
+    fi
+}
+
 # Main script starts here
 validate_os_version
 
@@ -236,6 +346,11 @@ fix_pam_configuration
 check_and_remove_packages
 ensure_openssh_installed
 check_uid_0_accounts
+check_sudoers_nopasswd
+check_zypper_gpgcheck
+check_ctrl_alt_del_reboot
+check_sshd_config
+lock_blank_password_accounts
 
 # Inform the user about STIG compliance
-echo "The system is now configured to require an encrypted boot password according to STIG requirements and has been checked for other security configurations."
+echo "The system is now configured to meet the requirements of STIG."

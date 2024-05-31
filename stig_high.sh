@@ -73,7 +73,7 @@ EOF
 # Function to configure GRUB password for BIOS systems
 configure_grub_password_bios() {
     echo "Configuring GRUB password for BIOS system."
-    
+
     # Define the GRUB password and generate its encrypted form
     GRUB_PASSWORD="your_secure_password"
     ENCRYPTED_PASSWORD=$(grub2-mkpasswd-pbkdf2 <<EOF
@@ -162,15 +162,16 @@ EOF
 
 # Function to check and remove specific packages
 check_and_remove_packages() {
-    PACKAGES=("vsftpd" "telnet-server")  # Add more packages to this list if needed
+    PACKAGES=(
+        "vsftpd"
+        "telnet-server"
+        # Add more packages to this list if needed
+    )
     for package in "${PACKAGES[@]}"; do
         if rpm -q $package > /dev/null 2>&1; then
             echo "Found $package. Removing..."
-            transactional-update shell <<EOF
-zypper -n rm $package
-exit
-EOF
-            log_message "Removed $package."
+            transactional-update pkg remove -y $package >> "$LOGFILE" 2>&1
+            echo "Removed $package." | tee -a "$LOGFILE"
         else
             echo "$package is not installed."
             log_message "$package is not installed."
@@ -182,15 +183,11 @@ EOF
 ensure_openssh_installed() {
     echo "Checking if openssh is installed..."
     if ! rpm -q openssh > /dev/null 2>&1; then
-        echo "openssh is not installed. Installing..."
-        transactional-update shell <<EOF
-zypper -n in openssh
-exit
-EOF
-        log_message "Installed openssh."
+        echo "openssh is not installed. Installing..." | tee -a "$LOGFILE"
+        transactional-update pkg install -yl openssh >> "$LOGFILE" 2>&1
+        echo "Installed openssh." | tee -a "$LOGFILE"
     else
-        echo "openssh is already installed."
-        log_message "openssh is already installed."
+        echo "openssh is already installed." | tee -a "$LOGFILE"
     fi
 
     echo "Ensuring sshd service is enabled..."

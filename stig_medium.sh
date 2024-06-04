@@ -366,6 +366,15 @@ configure_ssh() {
     echo "Verifying SSH private keys have mode 0640." | tee -a "$LOGFILE"
     find /etc/ssh -type f -name 'ssh_host_*_key' -exec chmod 0640 {} \;
     find /root/.ssh /home/*/.ssh -type f -name 'id_*' -exec chmod 0640 {} \;
+
+    echo "Verifying SSH public keys have mode 0644." | tee -a "$LOGFILE"
+    find /etc/ssh -name 'ssh_host*key.pub' -exec stat -c "%a %n" {} \; | while read -r mode file; do
+        if [ "$mode" -gt 644 ]; then
+            echo "File $file has mode $mode, changing to 0644." | tee -a "$LOGFILE"
+            sudo chmod 0644 "$file" >> "$LOGFILE" 2>&1
+        fi
+    done
+
     if systemctl restart sshd >> "$LOGFILE" 2>&1; then
         echo "SSHD restarted successfully with updated settings." | tee -a "$LOGFILE"
     else

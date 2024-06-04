@@ -363,6 +363,13 @@ configure_ssh() {
         echo "StrictModes yes" >> "$sshd_config"
     fi
 
+    echo "Disabling known hosts authentication by setting IgnoreUserKnownHosts to yes." | tee -a "$LOGFILE"
+    if grep -iq "^IgnoreUserKnownHosts" "$sshd_config"; then
+        sed -i "s/^IgnoreUserKnownHosts.*/IgnoreUserKnownHosts yes/" "$sshd_config"
+    else
+        echo "IgnoreUserKnownHosts yes" >> "$sshd_config"
+    fi
+
     echo "Verifying SSH private keys have mode 0640." | tee -a "$LOGFILE"
     find /etc/ssh -type f -name 'ssh_host_*_key' -exec chmod 0640 {} \;
     find /root/.ssh /home/*/.ssh -type f -name 'id_*' -exec chmod 0640 {} \;

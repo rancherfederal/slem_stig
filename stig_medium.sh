@@ -389,6 +389,57 @@ configure_ssh() {
     fi
 }
 
+# Function to copy PAM configuration files to static locations and remove soft links
+copy_and_fix_pam_files() {
+    echo "Copying PAM configuration files to their static locations and removing soft links." | tee -a "$LOGFILE"
+    
+    sudo sh -c 'for X in /etc/pam.d/common-*-pc; do
+        echo "Copying $X to ${X:0:-3}" | tee -a "'$LOGFILE'"
+        if cp -ivp --remove-destination "$X" "${X:0:-3}" >> "'$LOGFILE'" 2>&1; then
+            echo "Successfully copied $X to ${X:0:-3}" | tee -a "'$LOGFILE'"
+        else
+            echo "Failed to copy $X to ${X:0:-3}" | tee -a "'$LOGFILE'"
+        fi
+    done'
+
+    echo "Verifying the SUSE operating system is configured to not overwrite PAM configuration on package changes." | tee -a "$LOGFILE"
+    echo "Checking for soft links between PAM configuration files." | tee -a "$LOGFILE"
+    local pam_links
+    pam_links=$(find /etc/pam.d/ -type l -iname "common-*")
+
+    if [ -n "$pam_links" ]; then
+        echo "Found soft links between PAM configuration files:" | tee -a "$LOGFILE"
+        echo "$pam_links" | tee -a "$LOGFILE"
+        echo "$pam_links" | while read -r link; do
+            echo "Removing soft link: $link" | tee -a "$LOGFILE"
+            if rm "$link" >> "$LOGFILE" 2>&1; then
+                echo "Successfully removed soft link: $link" | tee -a "$LOGFILE"
+            else
+                echo "Failed to remove soft link: $link" | tee -a "$LOGFILE"
+            fi
+        done
+    else
+        echo "No soft links found between PAM configuration files." | tee -a "$LOGFILE"
+    fi
+}
+
+# Function to disable kdump.service and log it
+disable_kdump_service() {
+    echo "Disabling kdump.service." | tee -a "$LOGFILE"
+    if sudo systemctl disable kdump.service >> "$LOGFILE" 2>&1; then
+        echo "Successfully disabled kdump.service." | tee -a "$LOGFILE"
+    else
+        echo "Failed to disable kdump.service." | tee -a "$LOGFILE"
+    fi
+
+    echo "Stopping kdump.service if it's running." | tee -a "$LOGFILE"
+    if sudo systemctl stop kdump.service >> "$LOGFILE" 2>&1; then
+        echo "Successfully stopped kdump.service." | tee -a "$LOGFILE"
+    else
+        echo "Failed to stop kdump.service." | tee -a "$LOGFILE"
+    fi
+}
+
 # Call the functions
 install_packages
 expire_temporary_accounts
@@ -403,3 +454,5 @@ check_ip_forwarding
 check_icmp_redirects
 check_source_route
 configure_ssh
+copy_and_fix_pam_files
+disable_kdump_service

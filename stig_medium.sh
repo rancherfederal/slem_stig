@@ -202,78 +202,79 @@ check_promiscuous_mode() {
 # Function to verify the SUSE operating system is not performing IPv4 and IPv6 packet forwarding
 check_ip_forwarding() {
     echo "Checking if IPv6 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-    local ipv6_default_forwarding
-    ipv6_default_forwarding=$(sysctl net.ipv6.conf.default.forwarding | awk '{print $3}')
-    if [ "$ipv6_default_forwarding" -eq 0 ]; then
-        echo "IPv6 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-    else
-        echo "IPv6 packet forwarding is enabled by default. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv6.conf.default.forwarding=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv6 packet forwarding by default." | tee -a "$LOGFILE"
-            echo "net.ipv6.conf.default.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+    if sysctl net.ipv6.conf.default.forwarding &> /dev/null; then
+        local ipv6_default_forwarding
+        ipv6_default_forwarding=$(sysctl net.ipv6.conf.default.forwarding | awk '{print $3}')
+        if [ "$ipv6_default_forwarding" -eq 0 ]; then
+            echo "IPv6 packet forwarding is disabled by default." | tee -a "$LOGFILE"
         else
-            echo "Failed to disable IPv6 packet forwarding by default." | tee -a "$LOGFILE"
+            echo "IPv6 packet forwarding is enabled by default. Disabling it." | tee -a "$LOGFILE"
+            if sudo sysctl -w net.ipv6.conf.default.forwarding=0 >> "$LOGFILE" 2>&1; then
+                echo "Successfully disabled IPv6 packet forwarding by default." | tee -a "$LOGFILE"
+                echo "net.ipv6.conf.default.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+            else
+                echo "Failed to disable IPv6 packet forwarding by default." | tee -a "$LOGFILE"
+            fi
         fi
+    else
+        echo "IPv6 default forwarding configuration not found." | tee -a "$LOGFILE"
     fi
 
     echo "Checking if IPv6 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-    local ipv6_all_forwarding
-    ipv6_all_forwarding=$(sysctl net.ipv6.conf.all.forwarding | awk '{print $3}')
-    if [ "$ipv6_all_forwarding" -eq 0 ]; then
-        echo "IPv6 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-    else
-        echo "IPv6 packet forwarding is enabled for all interfaces. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv6.conf.all.forwarding=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv6 packet forwarding for all interfaces." | tee -a "$LOGFILE"
-            echo "net.ipv6.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+    if sysctl net.ipv6.conf.all.forwarding &> /dev/null; then
+        local ipv6_all_forwarding
+        ipv6_all_forwarding=$(sysctl net.ipv6.conf.all.forwarding | awk '{print $3}')
+        if [ "$ipv6_all_forwarding" -eq 0 ]; then
+            echo "IPv6 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
         else
-            echo "Failed to disable IPv6 packet forwarding for all interfaces." | tee -a "$LOGFILE"
+            echo "IPv6 packet forwarding is enabled for all interfaces. Disabling it." | tee -a "$LOGFILE"
+            if sudo sysctl -w net.ipv6.conf.all.forwarding=0 >> "$LOGFILE" 2>&1; then
+                echo "Successfully disabled IPv6 packet forwarding for all interfaces." | tee -a "$LOGFILE"
+                echo "net.ipv6.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+            else
+                echo "Failed to disable IPv6 packet forwarding for all interfaces." | tee -a "$LOGFILE"
+            fi
         fi
-    fi
-
-    echo "Checking if IPv6 packet forwarding is disabled." | tee -a "$LOGFILE"
-    local ipv6_forwarding
-    ipv6_forwarding=$(sysctl net.ipv6.conf.forwarding | awk '{print $3}')
-    if [ "$ipv6_forwarding" -eq 0 ]; then
-        echo "IPv6 packet forwarding is disabled." | tee -a "$LOGFILE"
     else
-        echo "IPv6 packet forwarding is enabled. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv6.conf.forwarding=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv6 packet forwarding." | tee -a "$LOGFILE"
-            echo "net.ipv6.conf.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-        else
-            echo "Failed to disable IPv6 packet forwarding." | tee -a "$LOGFILE"
-        fi
+        echo "IPv6 all forwarding configuration not found." | tee -a "$LOGFILE"
     fi
 
     echo "Checking if IPv4 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-    local ipv4_default_forwarding
-    ipv4_default_forwarding=$(sysctl net.ipv4.conf.default.forwarding | awk '{print $3}')
-    if [ "$ipv4_default_forwarding" -eq 0 ]; then
-        echo "IPv4 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-    else
-        echo "IPv4 packet forwarding is enabled by default. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv4.conf.default.forwarding=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv4 packet forwarding by default." | tee -a "$LOGFILE"
-            echo "net.ipv4.conf.default.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+    if sysctl net.ipv4.conf.default.forwarding &> /dev/null; then
+        local ipv4_default_forwarding
+        ipv4_default_forwarding=$(sysctl net.ipv4.conf.default.forwarding | awk '{print $3}')
+        if [ "$ipv4_default_forwarding" -eq 0 ]; then
+            echo "IPv4 packet forwarding is disabled by default." | tee -a "$LOGFILE"
         else
-            echo "Failed to disable IPv4 packet forwarding by default." | tee -a "$LOGFILE"
+            echo "IPv4 packet forwarding is enabled by default. Disabling it." | tee -a "$LOGFILE"
+            if sudo sysctl -w net.ipv4.conf.default.forwarding=0 >> "$LOGFILE" 2>&1; then
+                echo "Successfully disabled IPv4 packet forwarding by default." | tee -a "$LOGFILE"
+                echo "net.ipv4.conf.default.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+            else
+                echo "Failed to disable IPv4 packet forwarding by default." | tee -a "$LOGFILE"
+            fi
         fi
+    else
+        echo "IPv4 default forwarding configuration not found." | tee -a "$LOGFILE"
     fi
 
     echo "Checking if IPv4 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-    local ipv4_all_forwarding
-    ipv4_all_forwarding=$(sysctl net.ipv4.conf.all.forwarding | awk '{print $3}')
-    if [ "$ipv4_all_forwarding" -eq 0 ]; then
-        echo "IPv4 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-    else
-        echo "IPv4 packet forwarding is enabled for all interfaces. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv4.conf.all.forwarding=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv4 packet forwarding for all interfaces." | tee -a "$LOGFILE"
-            echo "net.ipv4.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+    if sysctl net.ipv4.conf.all.forwarding &> /dev/null; then
+        local ipv4_all_forwarding
+        ipv4_all_forwarding=$(sysctl net.ipv4.conf.all.forwarding | awk '{print $3}')
+        if [ "$ipv4_all_forwarding" -eq 0 ]; then
+            echo "IPv4 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
         else
-            echo "Failed to disable IPv4 packet forwarding for all interfaces." | tee -a "$LOGFILE"
+            echo "IPv4 packet forwarding is enabled for all interfaces. Disabling it." | tee -a "$LOGFILE"
+            if sudo sysctl -w net.ipv4.conf.all.forwarding=0 >> "$LOGFILE" 2>&1; then
+                echo "Successfully disabled IPv4 packet forwarding for all interfaces." | tee -a "$LOGFILE"
+                echo "net.ipv4.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
+            else
+                echo "Failed to disable IPv4 packet forwarding for all interfaces." | tee -a "$LOGFILE"
+            fi
         fi
+    else
+        echo "IPv4 all forwarding configuration not found." | tee -a "$LOGFILE"
     fi
 }
 

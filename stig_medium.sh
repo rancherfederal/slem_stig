@@ -426,18 +426,23 @@ copy_and_fix_pam_files() {
 
 # Function to disable kdump.service and log it
 disable_kdump_service() {
-    echo "Disabling kdump.service." | tee -a "$LOGFILE"
-    if sudo systemctl disable kdump.service >> "$LOGFILE" 2>&1; then
-        echo "Successfully disabled kdump.service." | tee -a "$LOGFILE"
-    else
-        echo "Failed to disable kdump.service." | tee -a "$LOGFILE"
-    fi
+    echo "Checking if kdump.service is running." | tee -a "$LOGFILE"
+    if systemctl is-active --quiet kdump.service; then
+        echo "kdump.service is running. Disabling and stopping it." | tee -a "$LOGFILE"
 
-    echo "Stopping kdump.service if it's running." | tee -a "$LOGFILE"
-    if sudo systemctl stop kdump.service >> "$LOGFILE" 2>&1; then
-        echo "Successfully stopped kdump.service." | tee -a "$LOGFILE"
+        if sudo systemctl stop kdump.service >> "$LOGFILE" 2>&1; then
+            echo "Successfully stopped kdump.service." | tee -a "$LOGFILE"
+        else
+            echo "Failed to stop kdump.service." | tee -a "$LOGFILE"
+        fi
+
+        if sudo systemctl disable kdump.service >> "$LOGFILE" 2>&1; then
+            echo "Successfully disabled kdump.service." | tee -a "$LOGFILE"
+        else
+            echo "Failed to disable kdump.service." | tee -a "$LOGFILE"
+        fi
     else
-        echo "Failed to stop kdump.service." | tee -a "$LOGFILE"
+        echo "kdump.service is not running." | tee -a "$LOGFILE"
     fi
 }
 

@@ -476,6 +476,175 @@ disable_kdump_service() {
     fi
 }
 
+# Function to verify the SUSE operating system enforces a delay of at least four seconds between logon prompts following a failed logon attempt
+check_and_fix_fail_delay() {
+    echo "Verifying the SUSE operating system enforces a delay of at least four seconds between logon prompts following a failed logon attempt." | tee -a "$LOGFILE"
+
+    if grep -q "^FAIL_DELAY" /etc/login.defs; then
+        current_delay=$(grep "^FAIL_DELAY" /etc/login.defs | awk '{print $2}')
+        if [ "$current_delay" -eq 4 ]; then
+            echo "FAIL_DELAY is correctly set to 4 seconds." | tee -a "$LOGFILE"
+        else
+            echo "FAIL_DELAY is set to $current_delay seconds, updating to 4 seconds." | tee -a "$LOGFILE"
+            if sed -i 's/^FAIL_DELAY.*/FAIL_DELAY 4/' /etc/login.defs >> "$LOGFILE" 2>&1; then
+                echo "Successfully updated FAIL_DELAY to 4 seconds." | tee -a "$LOGFILE"
+            else
+                echo "Failed to update FAIL_DELAY." | tee -a "$LOGFILE"
+            fi
+        fi
+    else
+        echo "FAIL_DELAY is not set, adding FAIL_DELAY 4 to /etc/login.defs." | tee -a "$LOGFILE"
+        if echo "FAIL_DELAY 4" >> /etc/login.defs; then
+            echo "Successfully added FAIL_DELAY 4 to /etc/login.defs." | tee -a "$LOGFILE"
+        else
+            echo "Failed to add FAIL_DELAY 4 to /etc/login.defs." | tee -a "$LOGFILE"
+        fi
+    fi
+}
+
+check_syscall_auditing() {
+    echo "Verifying syscall auditing has not been disabled." | tee -a "$LOGFILE"
+    
+    local auditctl_output
+    auditctl_output=$(auditctl -l | grep -i "a task,never")
+    
+    if [ -n "$auditctl_output" ]; then
+        echo "Syscall auditing has been disabled by a rule: $auditctl_output" | tee -a "$LOGFILE"
+        echo "This is a finding. Please manually inspect and correct the configuration." | tee -a "$LOGFILE"
+    else
+        echo "Syscall auditing is correctly configured." | tee -a "$LOGFILE"
+    fi
+
+    echo "Verifying the default rule '-a task,never' is not statically defined." | tee -a "$LOGFILE"
+    
+    local static_rule
+    static_rule=$(grep -rv "^#" /etc/audit/rules.d/ | grep -i "a task,never")
+    
+    if [ -n "$static_rule" ]; then
+        echo "Found static definition of '-a task,never' in audit rules: $static_rule" | tee -a "$LOGFILE"
+        echo "Removing the static definition of '-a task,never'." | tee -a "$LOGFILE"
+        if sed -i '/a task,never/d' /etc/audit/rules.d/* >> "$LOGFILE" 2>&1; then
+            echo "Successfully removed the static definition of '-a task,never'." | tee -a "$LOGFILE"
+            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
+                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
+            else
+                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
+            fi
+        else
+            echo "Failed to remove the static definition of '-a task,never'." | tee -a "$LOGFILE"
+        fi
+    else
+        echo "No static definition of '-a task,never' found in audit rules." | tee -a "$LOGFILE"
+    fi
+}
+
+# Function to verify auditing for /var/log/btmp, /var/log/wtmp, /run/utmp, and specific system calls
+check_and_fix_audit_logs() {
+    echo "Verifying if /var/log/btmp, /var/log/wtmp, and /run/utmp are being audited." | tee -a "$LOGFILE"
+
+    # Check /var/log/btmp
+    local btmp_audit_rule
+    btmp_audit_rule=$(auditctl -l | grep -w '/var/log/btmp')
+
+    if [ -n "$btmp_audit_rule" ]; then
+        echo "/var/log/btmp is being audited." | tee -a "$LOGFILE"
+    else
+        echo "/var/log/btmp is not being audited. Adding audit rule." | tee -a "$LOGFILE"
+        if echo "-w /var/log/btmp -p wa -k login_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
+            echo "Successfully added audit rule for /var/log/btmp." | tee -a "$LOGFILE"
+            if auditctl -w /var/log/btmp -p wa -k login_mod >> "$LOGFILE" 2>&1; then
+                echo "Successfully applied audit rule for /var/log/btmp." | tee -a "$LOGFILE"
+            else
+                echo "Failed to apply audit rule for /var/log/btmp." | tee -a "$LOGFILE"
+            fi
+            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
+                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
+            else
+                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
+            fi
+        else
+            echo "Failed to add audit rule for /var/log/btmp." | tee -a "$LOGFILE"
+        fi
+    fi
+
+    # Check /var/log/wtmp
+    local wtmp_audit_rule
+    wtmp_audit_rule=$(auditctl -l | grep -w '/var/log/wtmp')
+
+    if [ -n "$wtmp_audit_rule" ]; then
+        echo "/var/log/wtmp is being audited." | tee -a "$LOGFILE"
+    else
+        echo "/var/log/wtmp is not being audited. Adding audit rule." | tee -a "$LOGFILE"
+        if echo "-w /var/log/wtmp -p wa -k login_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
+            echo "Successfully added audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
+            if auditctl -w /var/log/wtmp -p wa -k login_mod >> "$LOGFILE" 2>&1; then
+                echo "Successfully applied audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
+            else
+                echo "Failed to apply audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
+            fi
+            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
+                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
+            else
+                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
+            fi
+        else
+            echo "Failed to add audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
+        fi
+    fi
+
+    # Check /run/utmp
+    local utmp_audit_rule
+    utmp_audit_rule=$(auditctl -l | grep -w '/run/utmp')
+
+    if [ -n "$utmp_audit_rule" ]; then
+        echo "/run/utmp is being audited." | tee -a "$LOGFILE"
+    else
+        echo "/run/utmp is not being audited. Adding audit rule." | tee -a "$LOGFILE"
+        if echo "-w /run/utmp -p wa -k login_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
+            echo "Successfully added audit rule for /run/utmp." | tee -a "$LOGFILE"
+            if auditctl -w /run/utmp -p wa -k login_mod >> "$LOGFILE" 2>&1; then
+                echo "Successfully applied audit rule for /run/utmp." | tee -a "$LOGFILE"
+            else
+                echo "Failed to apply audit rule for /run/utmp." | tee -a "$LOGFILE"
+            fi
+            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
+                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
+            else
+                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
+            fi
+        else
+            echo "Failed to add audit rule for /run/utmp." | tee -a "$LOGFILE"
+        fi
+    fi
+
+    # Check unlink, unlinkat, rename, renameat, rmdir system calls
+    local syscall_audit_rule
+    syscall_audit_rule=$(auditctl -l | grep 'unlink\|rename\|rmdir')
+
+    if [[ ! "$syscall_audit_rule" =~ "arch=b32" ]] || [[ ! "$syscall_audit_rule" =~ "arch=b64" ]]; then
+        echo "System calls unlink, unlinkat, rename, renameat, rmdir are not being audited correctly. Adding audit rules." | tee -a "$LOGFILE"
+        if echo "-a always,exit -F arch=b32 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE" && \
+           echo "-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
+            echo "Successfully added audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
+            if auditctl -a always,exit -F arch=b32 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod >> "$LOGFILE" 2>&1 && \
+               auditctl -a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod >> "$LOGFILE" 2>&1; then
+                echo "Successfully applied audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
+            else
+                echo "Failed to apply audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
+            fi
+            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
+                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
+            else
+                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
+            fi
+        else
+            echo "Failed to add audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
+        fi
+    else
+        echo "System calls unlink, unlinkat, rename, renameat, rmdir are being audited correctly." | tee -a "$LOGFILE"
+    fi
+}
+
 # Call the functions
 install_packages
 expire_temporary_accounts
@@ -491,3 +660,6 @@ check_source_route
 configure_ssh
 copy_and_fix_pam
 disable_kdump_service
+check_and_fix_fail_delay
+check_syscall_auditing
+check_and_fix_audit_log

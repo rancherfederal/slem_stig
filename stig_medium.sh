@@ -81,22 +81,6 @@ configure_sshd_kex() {
     fi
 }
 
-# Function to verify the system is not configured to bypass password requirements for privilege escalation
-check_sudo_pam() {
-    local sudo_pam="/etc/pam.d/sudo"
-    echo "Checking /etc/pam.d/sudo for pam_succeed_if." | tee -a "$LOGFILE"
-    if grep -iq "pam_succeed_if" "$sudo_pam"; then
-        echo "Found pam_succeed_if in $sudo_pam. Removing it." | tee -a "$LOGFILE"
-        if sed -i '/pam_succeed_if/d' "$sudo_pam" >> "$LOGFILE" 2>&1; then
-            echo "Successfully removed pam_succeed_if from $sudo_pam." | tee -a "$LOGFILE"
-        else
-            echo "Failed to remove pam_succeed_if from $sudo_pam." | tee -a "$LOGFILE"
-        fi
-    else
-        echo "No pam_succeed_if entries found in $sudo_pam." | tee -a "$LOGFILE"
-    fi
-}
-
 # Function to verify the operating system specifies only the default "include" directory for the /etc/sudoers file
 check_sudoers_include() {
     local sudoers_file="/etc/sudoers"
@@ -403,7 +387,8 @@ configure_ssh() {
 }
 
 # Function to copy PAM configuration files to static locations and remove soft links
-copy_and_fix_pam_files() {
+# and to verify the system is not configured to bypass password requirements for privilege escalation
+check_and_fix_pam() {
     echo "Copying PAM configuration files to their static locations and removing soft links." | tee -a "$LOGFILE"
     
     sudo sh -c 'for X in /etc/pam.d/common-*-pc; do
@@ -434,6 +419,39 @@ copy_and_fix_pam_files() {
     else
         echo "No soft links found between PAM configuration files." | tee -a "$LOGFILE"
     fi
+
+    echo "Verifying the SUSE operating system enforces a delay of at least four seconds between logon prompts following a failed logon attempt." | tee -a "$LOGFILE"
+    if grep -q "pam_faildelay" /etc/pam.d/common-auth; then
+        if grep -q "pam_faildelay.so delay=4000000" /etc/pam.d/common-auth; then
+            echo "The delay is correctly set to 4000000 microseconds." | tee -a "$LOGFILE"
+        else
+            echo "The delay is not set correctly. Updating the delay to 4000000 microseconds." | tee -a "$LOGFILE"
+            if sed -i '/pam_faildelay/s/.*/auth required pam_faildelay.so delay=4000000/' /etc/pam.d/common-auth >> "$LOGFILE" 2>&1; then
+                echo "Successfully updated the delay to 4000000 microseconds." | tee -a "$LOGFILE"
+            else
+                echo "Failed to update the delay." | tee -a "$LOGFILE"
+            fi
+        fi
+    else
+        echo "The pam_faildelay line is missing. Adding the delay setting." | tee -a "$LOGFILE"
+        if echo "auth required pam_faildelay.so delay=4000000" >> /etc/pam.d/common-auth; then
+            echo "Successfully added the delay setting." | tee -a "$LOGFILE"
+        else
+            echo "Failed to add the delay setting." | tee -a "$LOGFILE"
+        fi
+    fi
+
+    echo "Checking /etc/pam.d/sudo for pam_succeed_if." | tee -a "$LOGFILE"
+    if grep -iq "pam_succeed_if" /etc/pam.d/sudo; then
+        echo "Found pam_succeed_if in /etc/pam.d/sudo. Removing it." | tee -a "$LOGFILE"
+        if sed -i '/pam_succeed_if/d' /etc/pam.d/sudo >> "$LOGFILE" 2>&1; then
+            echo "Successfully removed pam_succeed_if from /etc/pam.d/sudo." | tee -a "$LOGFILE"
+        else
+            echo "Failed to remove pam_succeed_if from /etc/pam.d/sudo." | tee -a "$LOGFILE"
+        fi
+    else
+        echo "No pam_succeed_if entries found in /etc/pam.d/sudo." | tee -a "$LOGFILE"
+    fi
 }
 
 # Function to disable kdump.service and log it
@@ -463,7 +481,6 @@ install_packages
 expire_temporary_accounts
 initialize_aide
 configure_sshd_kex
-check_sudo_pam
 check_sudoers_include
 check_umask
 check_files_ownership
@@ -472,5 +489,5 @@ check_ip_forwarding
 check_icmp_redirects
 check_source_route
 configure_ssh
-copy_and_fix_pam_files
+copy_and_fix_pam
 disable_kdump_service

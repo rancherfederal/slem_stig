@@ -645,7 +645,309 @@ check_and_fix_audit_logs() {
     fi
 }
 
-# Call the functions
+# Function to verify that the "audit-audispd-plugins" package is installed and the "au-remote" plugin is enabled
+check_audit_audispd_plugins() {
+    local package_name="audit-audispd-plugins"
+
+    echo "Checking if $package_name package is installed." >> "$LOGFILE"
+    if ! zypper info "$package_name" | grep -q "Installed: Yes"; then
+        echo "$package_name package is not installed. Installing it using transactional-update." >> "$LOGFILE"
+        if transactional-update pkg install -y "$package_name" >> "$LOGFILE" 2>&1; then
+            echo "Successfully installed $package_name." >> "$LOGFILE"
+        else
+            echo "Failed to install $package_name." >> "$LOGFILE"
+        fi
+    else
+        echo "$package_name package is already installed." >> "$LOGFILE"
+    fi
+
+    echo "Verifying the 'au-remote' plugin is enabled." >> "$LOGFILE"
+    if ! grep -q "^active = yes" /etc/audisp/plugins.d/au-remote.conf; then
+        echo "'au-remote' plugin is not enabled. Enabling it." >> "$LOGFILE"
+        transactional-update shell <<EOF
+        sed -i "s/^active.*/active = yes/" /etc/audisp/plugins.d/au-remote.conf
+        systemctl restart auditd
+EOF
+        echo "Enabled 'au-remote' plugin and restarted auditd." >> "$LOGFILE"
+    else
+        echo "'au-remote' plugin is already enabled." >> "$LOGFILE"
+    fi
+
+    if systemctl is-active --quiet auditd; then
+        echo "auditd service is active." >> "$LOGFILE"
+    else
+        echo "Failed to restart auditd service." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify AIDE configuration for audit tools
+check_aide_configuration() {
+    local aide_config_file="/etc/aide.conf"
+    local expected_entries=(
+        "/usr/sbin/auditctl p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+        "/usr/sbin/auditd p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+        "/usr/sbin/ausearch p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+        "/usr/sbin/aureport p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+        "/usr/sbin/autrace p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+        "/usr/sbin/audispd p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+        "/usr/sbin/augenrules p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
+    )
+
+    echo "Checking AIDE configuration for audit tools." >> "$LOGFILE"
+    local missing_entries=()
+
+    for entry in "${expected_entries[@]}"; do
+        if ! grep -Fxq "$entry" "$aide_config_file"; then
+            missing_entries+=("$entry")
+        fi
+    done
+
+    if [ ${#missing_entries[@]} -eq 0 ]; then
+        echo "AIDE is properly configured to protect the integrity of the audit tools." >> "$LOGFILE"
+    else
+        echo "AIDE is missing the following entries for audit tools:" >> "$LOGFILE"
+        printf "%s\n" "${missing_entries[@]}" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+        for entry in "${missing_entries[@]}"; do
+            echo "\$entry" >> $aide_config_file
+        done
+        exit
+EOF
+
+        echo "Added missing entries to $aide_config_file and restarting AIDE initialization." >> "$LOGFILE"
+        transactional-update --continue-init
+    fi
+}
+
+# Function to verify and fix permissions for SUSE audit tools
+check_audit_tools_permissions() {
+    local permissions_file="/etc/permissions.local"
+    local expected_permissions=(
+        "/usr/sbin/audispd root:root 0750"
+        "/usr/sbin/auditctl root:root 0750"
+        "/usr/sbin/auditd root:root 0750"
+        "/usr/sbin/ausearch root:root 0755"
+        "/usr/sbin/aureport root:root 0755"
+        "/usr/sbin/autrace root:root 0750"
+        "/usr/sbin/augenrules root:root 0750"
+    )
+
+    echo "Checking permissions in $permissions_file for audit tools." >> "$LOGFILE"
+    local missing_permissions=()
+
+    for permission in "${expected_permissions[@]}"; do
+        if ! grep -Fxq "$permission" "$permissions_file"; then
+            missing_permissions+=("$permission")
+        fi
+    done
+
+    if [ ${#missing_permissions[@]} -eq 0 ]; then
+        echo "All required permissions for audit tools are present in $permissions_file." >> "$LOGFILE"
+    else
+        echo "Missing the following permissions in $permissions_file:" >> "$LOGFILE"
+        printf "%s\n" "${missing_permissions[@]}" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+        for permission in "${missing_permissions[@]}"; do
+            echo "\$permission" >> $permissions_file
+        done
+        exit
+EOF
+
+        echo "Added missing permissions to $permissions_file." >> "$LOGFILE"
+    fi
+
+    echo "Verifying permissions using chkstat." >> "$LOGFILE"
+    local chkstat_output
+    chkstat_output=$(chkstat $permissions_file 2>&1)
+
+    if [ -z "$chkstat_output" ]; then
+        echo "All audit information files and folders have correct permissions." >> "$LOGFILE"
+    else
+        echo "Permissions issues found by chkstat:" >> "$LOGFILE"
+        echo "$chkstat_output" >> "$LOGFILE"
+        transactional-update shell <<EOF
+        chkstat --system --set
+        exit
+EOF
+        echo "Permissions fixed using chkstat." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix permissions for audit rules
+check_audit_rules_permissions() {
+    local permissions_file="/etc/permissions.local"
+    local expected_permissions=(
+        "/var/log/audit root:root 600"
+        "/var/log/audit/audit.log root:root 600"
+        "/etc/audit/audit.rules root:root 640"
+        "/etc/audit/rules.d/audit.rules root:root 640"
+    )
+
+    echo "Checking permissions in $permissions_file for audit rules." >> "$LOGFILE"
+    local missing_permissions=()
+
+    for permission in "${expected_permissions[@]}"; do
+        if ! grep -iFxq "$permission" "$permissions_file"; then
+            missing_permissions+=("$permission")
+        fi
+    done
+
+    if [ ${#missing_permissions[@]} -eq 0 ]; then
+        echo "All required permissions for audit rules are present in $permissions_file." >> "$LOGFILE"
+    else
+        echo "Missing the following permissions in $permissions_file:" >> "$LOGFILE"
+        printf "%s\n" "${missing_permissions[@]}" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+for permission in "${missing_permissions[@]}"; do
+    echo "\$permission" >> $permissions_file
+done
+EOF
+
+        echo "Added missing permissions to $permissions_file." >> "$LOGFILE"
+    fi
+
+    echo "Verifying permissions using chkstat." >> "$LOGFILE"
+    transactional-update shell <<EOF
+chkstat --system --set >> "$LOGFILE" 2>&1
+EOF
+
+    local chkstat_output
+    chkstat_output=$(chkstat $permissions_file 2>&1)
+
+    if [ -z "$chkstat_output" ]; then
+        echo "All audit information files and folders have correct permissions." >> "$LOGFILE"
+    else
+        echo "Permissions issues found by chkstat:" >> "$LOGFILE"
+        echo "$chkstat_output" >> "$LOGFILE"
+        transactional-update shell <<EOF
+chkstat --system --set >> "$LOGFILE" 2>&1
+EOF
+        echo "Permissions fixed using chkstat." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the disk_full_action setting in auditd.conf
+check_disk_full_action() {
+    local auditd_conf_file="/etc/audit/auditd.conf"
+    local valid_actions=("SYSLOG" "SINGLE" "HALT")
+
+    echo "Checking disk_full_action setting in $auditd_conf_file." >> "$LOGFILE"
+    local disk_full_action
+    disk_full_action=$(grep -E "^disk_full_action" "$auditd_conf_file" | awk -F= '{print $2}' | xargs)
+
+    if [[ ! " ${valid_actions[@]} " =~ " ${disk_full_action} " ]]; then
+        echo "Invalid or missing disk_full_action setting: $disk_full_action" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/^disk_full_action/d' $auditd_conf_file
+echo "disk_full_action = SYSLOG" >> $auditd_conf_file
+EOF
+
+        echo "Set disk_full_action to SYSLOG in $auditd_conf_file." >> "$LOGFILE"
+    else
+        echo "disk_full_action is correctly set to $disk_full_action." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix aliases in /etc/aliases
+check_aliases() {
+    local aliases_file="/etc/aliases"
+    local monitored_email="monitored@example.com"  # Replace with the actual monitored email account
+
+    echo "Checking postmaster alias in $aliases_file." >> "$LOGFILE"
+    local postmaster_alias
+    postmaster_alias=$(grep -i "^postmaster:" "$aliases_file" | awk -F: '{print $2}' | xargs)
+
+    if [ "$postmaster_alias" != "root" ]; then
+        echo "Invalid or missing postmaster alias: $postmaster_alias" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/^postmaster:/d' $aliases_file
+echo "postmaster: root" >> $aliases_file
+EOF
+
+        echo "Set postmaster alias to root in $aliases_file." >> "$LOGFILE"
+    else
+        echo "postmaster alias is correctly set to root." >> "$LOGFILE"
+    fi
+
+    echo "Checking root alias in $aliases_file." >> "$LOGFILE"
+    local root_alias
+    root_alias=$(grep -i "^root:" "$aliases_file" | awk -F: '{print $2}' | xargs)
+
+    if [ "$root_alias" != "$monitored_email" ]; then
+        echo "Invalid or missing root alias: $root_alias" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/^root:/d' $aliases_file
+echo "root: $monitored_email" >> $aliases_file
+EOF
+
+        echo "Set root alias to $monitored_email in $aliases_file." >> "$LOGFILE"
+    else
+        echo "root alias is correctly set to $monitored_email." >> "$LOGFILE"
+    fi
+
+    echo "Reloading aliases database." >> "$LOGFILE"
+    newaliases >> "$LOGFILE" 2>&1
+}
+
+# Function to verify and fix the action_mail_acct setting in auditd.conf
+check_action_mail_acct() {
+    local auditd_conf_file="/etc/audit/auditd.conf"
+    local expected_account="root"
+
+    echo "Checking action_mail_acct setting in $auditd_conf_file." >> "$LOGFILE"
+    local action_mail_acct
+    action_mail_acct=$(grep -E "^action_mail_acct" "$auditd_conf_file" | awk -F= '{print $2}' | xargs)
+
+    if [ "$action_mail_acct" != "$expected_account" ]; then
+        echo "Invalid or missing action_mail_acct setting: $action_mail_acct" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/^action_mail_acct/d' $auditd_conf_file
+echo "action_mail_acct = $expected_account" >> $auditd_conf_file
+exit
+EOF
+
+        echo "Set action_mail_acct to $expected_account in $auditd_conf_file." >> "$LOGFILE"
+    else
+        echo "action_mail_acct is correctly set to $expected_account." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "su" command
+check_su_command_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-priv_change"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'su' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/su' > /dev/null; then
+        echo "'su' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'su' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        systemctl restart auditd
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'su' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Call the function
 install_packages
 expire_temporary_accounts
 initialize_aide
@@ -663,3 +965,11 @@ disable_kdump_service
 check_and_fix_fail_delay
 check_syscall_auditing
 check_and_fix_audit_log
+check_audit_audispd_plugins
+check_aide_configuration
+check_audit_tools_permissions
+check_audit_rules_permissions
+check_disk_full_action
+check_aliases
+check_action_mail_acct
+check_su_command_audit

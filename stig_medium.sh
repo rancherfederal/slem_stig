@@ -947,6 +947,608 @@ EOF
     fi
 }
 
+# Function to verify and fix audit rules for the "delete_module" system call
+check_module_audit() {
+    local audit_rule_b32="-a always,exit -F arch=b32 -S init_module,finit_module -F auid>=1000 -F auid!=-1 -k moduleload"
+    local audit_rule_b64="-a always,exit -F arch=b64 -S init_module,finit_module -F auid>=1000 -F auid!=-1 -k moduleload"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'init_module' and 'finit_module' system calls are being audited." >> "$LOGFILE"
+    local missing_rules=false
+
+    if ! auditctl -l | grep -q "$audit_rule_b32"; then
+        echo "Missing audit rule for 'init_module' and 'finit_module' system calls (b32)." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if ! auditctl -l | grep -q "$audit_rule_b64"; then
+        echo "Missing audit rule for 'init_module' and 'finit_module' system calls (b64)." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if [ "$missing_rules" = true ]; then
+        transactional-update shell <<EOF
+echo "$audit_rule_b32" >> $audit_rules_file
+echo "$audit_rule_b64" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for 'init_module' and 'finit_module' system calls to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'init_module' and 'finit_module' system calls are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "delete_module" system call
+check_delete_module_audit() {
+    local audit_rule_b32="-a always,exit -F arch=b32 -S delete_module -F auid>=1000 -F auid!=-1 -k unload_module"
+    local audit_rule_b64="-a always,exit -F arch=b64 -S delete_module -F auid>=1000 -F auid!=-1 -k unload_module"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'delete_module' system call is being audited." >> "$LOGFILE"
+    local missing_rules=false
+
+    if ! auditctl -l | grep -q 'delete_module'; then
+        echo "Missing audit rule for 'delete_module' system call." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if [ "$missing_rules" = true ]; then
+        transactional-update shell <<EOF
+echo "$audit_rule_b32" >> $audit_rules_file
+echo "$audit_rule_b64" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for 'delete_module' system call to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'delete_module' system call is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "pam_timestamp_check" command
+check_pam_timestamp_check_audit() {
+    local audit_rule="-a always,exit -S all -F path=/sbin/pam_timestamp_check -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-pam_timestamp_check"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'pam_timestamp_check' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/sbin/pam_timestamp_check' > /dev/null; then
+        echo "'pam_timestamp_check' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'pam_timestamp_check' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'pam_timestamp_check' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "usermod" command
+check_usermod_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/sbin/usermod -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-usermod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'usermod' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/sbin/usermod' > /dev/null; then
+        echo "'usermod' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'usermod' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'usermod' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "passmass" command
+check_passmass_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/passmass -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-passmass"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'passmass' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/passmass' > /dev/null; then
+        echo "'passmass' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'passmass' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'passmass' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "lastlog" file
+check_lastlog_audit() {
+    local audit_rule="-w /var/log/lastlog -p wa -k logins"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'lastlog' file is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/var/log/lastlog' > /dev/null; then
+        echo "'lastlog' file is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'lastlog' file to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'lastlog' file is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "tallylog" file
+check_tallylog_audit() {
+    local audit_rule="-w /var/log/tallylog -p wa -k logins"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'tallylog' file is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/var/log/tallylog' > /dev/null; then
+        echo "'tallylog' file is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'tallylog' file to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'tallylog' file is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "rm" command
+check_rm_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/rm -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'rm' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/rm' > /dev/null; then
+        echo "'rm' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'rm' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'rm' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "chcon" command
+check_chcon_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/chcon -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'chcon' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/chcon' > /dev/null; then
+        echo "'chcon' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'chcon' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'chcon' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "chacl" command
+check_chacl_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/chacl -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'chacl' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/chacl' > /dev/null; then
+        echo "'chacl' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'chacl' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'chacl' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "setfacl" command
+check_setfacl_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/setfacl -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'setfacl' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/setfacl' > /dev/null; then
+        echo "'setfacl' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'setfacl' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'setfacl' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "chmod" command
+check_chmod_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/chmod -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'chmod' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/chmod' > /dev/null; then
+        echo "'chmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'chmod' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'chmod' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "kmod" command
+check_kmod_audit() {
+    local audit_rule="-w /usr/bin/kmod -p x -k modules"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'kmod' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/kmod' > /dev/null; then
+        echo "'kmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'kmod' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'kmod' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "modprobe" command
+check_modprobe_audit() {
+    local audit_rule="-w /sbin/modprobe -p x -k modules"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'modprobe' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/sbin/modprobe' > /dev/null; then
+        echo "'modprobe' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'modprobe' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'modprobe' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "rmmod" command
+check_rmmod_audit() {
+    local audit_rule="-w /sbin/rmmod -p x -k modules"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'rmmod' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/sbin/rmmod' > /dev/null; then
+        echo "'rmmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'rmmod' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'rmmod' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "insmod" command
+check_insmod_audit() {
+    local audit_rule="-w /sbin/insmod -p x -k modules"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'insmod' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/sbin/insmod' > /dev/null; then
+        echo "'insmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'insmod' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'insmod' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "sudoedit" command
+check_sudoedit_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/sudoedit -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-sudoedit"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'sudoedit' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/sudoedit' > /dev/null; then
+        echo "'sudoedit' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'sudoedit' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'sudoedit' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "chmod", "fchmod", and "fchmodat" system calls
+check_chmod_syscalls_audit() {
+    local audit_rule_b32="-a always,exit -F arch=b32 -S chmod,fchmod,fchmodat -F auid>=1000 -F auid!=-1 -k perm_mod"
+    local audit_rule_b64="-a always,exit -F arch=b64 -S chmod,fchmod,fchmodat -F auid>=1000 -F auid!=-1 -k perm_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'chmod', 'fchmod', and 'fchmodat' system calls are being audited." >> "$LOGFILE"
+    local missing_rules=false
+
+    if ! auditctl -l | grep -q 'chmod'; then
+        echo "Missing audit rule for 'chmod', 'fchmod', and 'fchmodat' system calls." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if [ "$missing_rules" = true ]; then
+        transactional-update shell <<EOF
+echo "$audit_rule_b32" >> $audit_rules_file
+echo "$audit_rule_b64" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for 'chmod', 'fchmod', and 'fchmodat' system calls to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'chmod', 'fchmod', and 'fchmodat' system calls are already being audited." >> "$LOGFILE"
+    fi
+}
+
 # Call the function
 install_packages
 expire_temporary_accounts
@@ -973,3 +1575,21 @@ check_disk_full_action
 check_aliases
 check_action_mail_acct
 check_su_command_audit
+check_module_audit
+check_delete_module_audit
+check_pam_timestamp_check_audit
+check_usermod_audit
+check_passmass_audit
+check_lastlog_audit
+check_tallylog_audit
+check_rm_audit
+check_chcon_audit
+check_chacl_audit
+check_setfacl_audit
+check_chmod_audit
+check_kmod_audit
+check_modprobe_audit
+check_rmmod_audit
+check_insmod_audit
+check_sudoedit_audit
+check_chmod_syscalls_audit

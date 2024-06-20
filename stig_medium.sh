@@ -1772,6 +1772,271 @@ EOF
     fi
 }
 
+# Function to verify and fix audit rules for the "passwd" command
+check_passwd_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/passwd -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-passwd"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'passwd' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/passwd' > /dev/null; then
+        echo "'passwd' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'passwd' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'passwd' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the status and enablement of the auditd service
+check_auditd_service() {
+    echo "Checking if the 'auditd' service is active and enabled." >> "$LOGFILE"
+    
+    local service_status=$(systemctl is-active auditd.service)
+    local service_enabled=$(systemctl is-enabled auditd.service)
+
+    if [ "$service_status" != "active" ] || [ "$service_enabled" != "enabled" ]; then
+        echo "'auditd' service is not active or not enabled." >> "$LOGFILE"
+
+        transactional-update shell <<EOF
+systemctl enable auditd.service
+systemctl start auditd.service
+exit
+EOF
+
+        echo "Enabled and started the 'auditd' service." >> "$LOGFILE"
+
+        # Verify the changes
+        service_status=$(systemctl is-active auditd.service)
+        service_enabled=$(systemctl is-enabled auditd.service)
+
+        if [ "$service_status" == "active" ] && [ "$service_enabled" == "enabled" ]; then
+            echo "'auditd' service is now active and enabled." >> "$LOGFILE"
+        else
+            echo "Failed to activate or enable the 'auditd' service." >> "$LOGFILE"
+        fi
+    else
+        echo "'auditd' service is already active and enabled." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "/etc/gshadow" file
+check_gshadow_audit() {
+    local audit_rule="-w /etc/gshadow -p wa -k account_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if modifications to '/etc/gshadow' are being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/etc/gshadow' > /dev/null; then
+        echo "Modifications to '/etc/gshadow' are not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for '/etc/gshadow' to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "Modifications to '/etc/gshadow' are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "/etc/security/opasswd" file
+check_opasswd_audit() {
+    local audit_rule="-w /etc/security/opasswd -p wa -k account_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if modifications to '/etc/security/opasswd' are being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/etc/security/opasswd' > /dev/null; then
+        echo "Modifications to '/etc/security/opasswd' are not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for '/etc/security/opasswd' to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "Modifications to '/etc/security/opasswd' are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "/etc/shadow" file
+check_shadow_audit() {
+    local audit_rule="-w /etc/shadow -p wa -k account_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if modifications to '/etc/shadow' are being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/etc/shadow' > /dev/null; then
+        echo "Modifications to '/etc/shadow' are not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for '/etc/shadow' to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "Modifications to '/etc/shadow' are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "/etc/group" file
+check_group_audit() {
+    local audit_rule="-w /etc/group -p wa -k account_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if modifications to '/etc/group' are being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/etc/group' > /dev/null; then
+        echo "Modifications to '/etc/group' are not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for '/etc/group' to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "Modifications to '/etc/group' are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "/etc/passwd" file
+check_passwd_audit() {
+    local audit_rule="-w /etc/passwd -p wa -k account_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if modifications to '/etc/passwd' are being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/etc/passwd' > /dev/null; then
+        echo "Modifications to '/etc/passwd' are not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for '/etc/passwd' to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "Modifications to '/etc/passwd' are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the use of pam_cracklib for preventing dictionary words in passwords
+check_pam_cracklib() {
+    local pam_file="/etc/pam.d/common-password"
+    local pam_rule="password requisite pam_cracklib.so"
+
+    echo "Checking if 'pam_cracklib.so' is being used to prevent dictionary words in passwords." >> "$LOGFILE"
+    if ! grep -q 'pam_cracklib.so' "$pam_file"; then
+        echo "'pam_cracklib.so' is not being used or the rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$pam_rule" >> $pam_file
+exit
+EOF
+
+        echo "Added pam_cracklib rule to $pam_file." >> "$LOGFILE"
+    else
+        echo "'pam_cracklib.so' is already being used to prevent dictionary words in passwords." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the enforcement of password complexity by requiring at least one special character
+check_pam_cracklib_special_char() {
+    local pam_file="/etc/pam.d/common-password"
+    local pam_rule="password requisite pam_cracklib.so ocredit=-1"
+
+    echo "Checking if 'pam_cracklib.so' enforces password complexity by requiring at least one special character." >> "$LOGFILE"
+    if ! grep -q 'password .* pam_cracklib.so .* ocredit=-1' "$pam_file"; then
+        echo "'pam_cracklib.so' is not enforcing password complexity or the rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/pam_cracklib.so/d' $pam_file
+echo "$pam_rule" >> $pam_file
+exit
+EOF
+
+        echo "Added pam_cracklib rule with ocredit=-1 to $pam_file." >> "$LOGFILE"
+    else
+        echo "'pam_cracklib.so' is already enforcing password complexity by requiring at least one special character." >> "$LOGFILE"
+    fi
+}
+
 # Call the function
 install_packages
 expire_temporary_accounts
@@ -1822,3 +2087,12 @@ configure_sudoers_audit
 check_crontab_audit
 check_chage_audit
 check_unix_chkpwd_audit
+check_passwd_audit
+check_auditd_service
+check_gshadow_audit
+check_opasswd_audit
+check_shadow_audit
+check_group_audit
+check_passwd_audit
+check_pam_cracklib
+check_pam_cracklib_special_char

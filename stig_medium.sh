@@ -1549,6 +1549,229 @@ EOF
     fi
 }
 
+# Function to verify and fix audit rules for the "setxattr", "fsetxattr", "lsetxattr", "removexattr", "fremovexattr", and "lremovexattr" system calls
+check_xattr_syscalls_audit() {
+    local audit_rule_b32="-a always,exit -F arch=b32 -S setxattr,fsetxattr,lsetxattr,removexattr,fremovexattr,lremovexattr -F auid>=1000 -F auid!=-1 -k perm_mod"
+    local audit_rule_b64="-a always,exit -F arch=b64 -S setxattr,fsetxattr,lsetxattr,removexattr,fremovexattr,lremovexattr -F auid>=1000 -F auid!=-1 -k perm_mod"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls are being audited." >> "$LOGFILE"
+    local missing_rules=false
+
+    if ! auditctl -l | grep -q 'xattr'; then
+        echo "Missing audit rule for 'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if [ "$missing_rules" = true ]; then
+        transactional-update shell <<EOF
+echo "$audit_rule_b32" >> $audit_rules_file
+echo "$audit_rule_b64" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for 'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "creat", "open", "openat", "open_by_handle_at", "truncate", and "ftruncate" system calls
+check_open_truncate_syscalls_audit() {
+    local audit_rule_b32_perm="-a always,exit -F arch=b32 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=-1 -k perm_access"
+    local audit_rule_b64_perm="-a always,exit -F arch=b64 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=-1 -k perm_access"
+    local audit_rule_b32_acces="-a always,exit -F arch=b32 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=-1 -k perm_access"
+    local audit_rule_b64_acces="-a always,exit -F arch=b64 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=-1 -k perm_access"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls are being audited." >> "$LOGFILE"
+    local missing_rules=false
+
+    if ! auditctl -l | grep -q 'open\|truncate\|creat'; then
+        echo "Missing audit rule for 'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if [ "$missing_rules" = true ]; then
+        transactional-update shell <<EOF
+echo "$audit_rule_b32_perm" >> $audit_rules_file
+echo "$audit_rule_b64_perm" >> $audit_rules_file
+echo "$audit_rule_b32_acces" >> $audit_rules_file
+echo "$audit_rule_b64_acces" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for 'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to configure audit rules for access to /etc/sudoers and /etc/sudoers.d/
+configure_sudoers_audit() {
+    local audit_rule_sudoers="-w /etc/sudoers -p wa -k privileged-actions"
+    local audit_rule_sudoers_d="-w /etc/sudoers.d -p wa -k privileged-actions"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if access to '/etc/sudoers' and '/etc/sudoers.d/' is being audited." >> "$LOGFILE"
+    local missing_rules=false
+
+    if ! auditctl -l | grep -q '/etc/sudoers'; then
+        echo "Missing audit rule for '/etc/sudoers'." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if ! auditctl -l | grep -q '/etc/sudoers.d'; then
+        echo "Missing audit rule for '/etc/sudoers.d/'." >> "$LOGFILE"
+        missing_rules=true
+    fi
+
+    if [ "$missing_rules" = true ]; then
+        transactional-update shell <<EOF
+echo "$audit_rule_sudoers" >> $audit_rules_file
+echo "$audit_rule_sudoers_d" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for '/etc/sudoers' and '/etc/sudoers.d/' to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'/etc/sudoers' and '/etc/sudoers.d/' are already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "crontab" command
+check_crontab_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/crontab -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-crontab"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'crontab' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/crontab' > /dev/null; then
+        echo "'crontab' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'crontab' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'crontab' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix audit rules for the "chage" command
+check_chage_audit() {
+    local audit_rule="-a always,exit -S all -F path=/usr/bin/chage -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-chage"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'chage' command is being audited." >> "$LOGFILE"
+    if ! auditctl -l | grep -w '/usr/bin/chage' > /dev/null; then
+        echo "'chage' command is not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rule for 'chage' command to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'chage' command is already being audited." >> "$LOGFILE"
+    fi
+}
+
+check_unix_chkpwd_audit() {
+    local audit_rule_unix_chkpwd="-a always,exit -S all -F path=/sbin/unix_chkpwd -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-unix-chkpwd"
+    local audit_rule_unix2_chkpwd="-a always,exit -S all -F path=/sbin/unix2_chkpwd -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-unix2-chkpwd"
+    local audit_rules_file="/etc/audit/rules.d/audit.rules"
+
+    echo "Checking if the 'unix_chkpwd' and 'unix2_chkpwd' commands are being audited." >> "$LOGFILE"
+    if ! auditctl -l | egrep -w "(unix_chkpwd|unix2_chkpwd)" > /dev/null; then
+        echo "'unix_chkpwd' or 'unix2_chkpwd' commands are not being audited or audit rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$audit_rule_unix_chkpwd" >> $audit_rules_file
+echo "$audit_rule_unix2_chkpwd" >> $audit_rules_file
+exit
+EOF
+
+        echo "Added audit rules for 'unix_chkpwd' and 'unix2_chkpwd' commands to $audit_rules_file." >> "$LOGFILE"
+
+        # Restart the auditd service to apply the changes
+        transactional-update shell <<EOF
+systemctl restart auditd
+exit
+EOF
+
+        if systemctl is-active --quiet auditd; then
+            echo "auditd service restarted successfully." >> "$LOGFILE"
+        else
+            echo "Failed to restart auditd service." >> "$LOGFILE"
+        fi
+    else
+        echo "'unix_chkpwd' and 'unix2_chkpwd' commands are already being audited." >> "$LOGFILE"
+    fi
+}
+
 # Call the function
 install_packages
 expire_temporary_accounts
@@ -1593,3 +1816,9 @@ check_rmmod_audit
 check_insmod_audit
 check_sudoedit_audit
 check_chmod_syscalls_audit
+check_xattr_syscalls_audit
+check_open_truncate_syscalls_audit
+configure_sudoers_audit
+check_crontab_audit
+check_chage_audit
+check_unix_chkpwd_audit

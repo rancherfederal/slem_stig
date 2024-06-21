@@ -2037,6 +2037,289 @@ EOF
     fi
 }
 
+# Function to verify and fix the enforcement of minimum 15-character password length
+check_pam_cracklib_minlen() {
+    local pam_file="/etc/pam.d/common-password"
+    local pam_rule="password requisite pam_cracklib.so minlen=15"
+
+    echo "Checking if 'pam_cracklib.so' enforces a minimum 15-character password length." >> "$LOGFILE"
+    if ! grep -q 'password .* pam_cracklib.so .* minlen=[0-9]*' "$pam_file"; then
+        echo "'pam_cracklib.so' is not enforcing minimum password length or the rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/pam_cracklib.so/d' $pam_file
+echo "$pam_rule" >> $pam_file
+exit
+EOF
+
+        echo "Added pam_cracklib rule with minlen=15 to $pam_file." >> "$LOGFILE"
+    else
+        local current_minlen
+        current_minlen=$(grep 'pam_cracklib.so' "$pam_file" | sed -n 's/.*minlen=\([0-9]*\).*/\1/p')
+        if [ "$current_minlen" -lt 15 ]; then
+            echo "Current minlen value ($current_minlen) is less than 15. Updating to 15." >> "$LOGFILE"
+            
+            transactional-update shell <<EOF
+sed -i 's/\(pam_cracklib.so.*minlen=\)[0-9]*/\115/' $pam_file
+exit
+EOF
+
+            echo "Updated pam_cracklib rule with minlen=15 in $pam_file." >> "$LOGFILE"
+        else
+            echo "Current minlen value ($current_minlen) is already 15 or more." >> "$LOGFILE"
+        fi
+    fi
+}
+
+# Function to configure password history to prohibit reuse for a minimum of five generations
+configure_pam_pwhistory() {
+    local pam_file="/etc/pam.d/common-password"
+    local pam_rule="password requisite pam_pwhistory.so remember=5 use_authtok"
+
+    echo "Configuring 'pam_pwhistory.so' to prohibit the reuse of a password for a minimum of five generations." >> "$LOGFILE"
+    
+    if grep -q 'pam_pwhistory.so' "$pam_file"; then
+        echo "Updating existing 'pam_pwhistory.so' configuration in $pam_file." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+sed -i '/pam_pwhistory.so/ s/$/ remember=5 use_authtok/' $pam_file
+exit
+EOF
+
+        echo "Updated 'pam_pwhistory.so' configuration to include 'remember=5 use_authtok' in $pam_file." >> "$LOGFILE"
+    else
+        echo "'pam_pwhistory.so' configuration not found. Adding it to $pam_file." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+echo "$pam_rule" >> $pam_file
+exit
+EOF
+
+        echo "Added 'pam_pwhistory.so' configuration with 'remember=5 use_authtok' to $pam_file." >> "$LOGFILE"
+    fi
+}
+
+# Function to create the password history file with appropriate ownership and permissions
+configure_password_history_file() {
+    local opasswd_file="/etc/security/opasswd"
+
+    echo "Configuring the password history file '$opasswd_file'." >> "$LOGFILE"
+    
+    transactional-update shell <<EOF
+touch $opasswd_file
+chown root:root $opasswd_file
+chmod 0600 $opasswd_file
+exit
+EOF
+
+    if [ -f "$opasswd_file" ] && [ "$(stat -c %U:%G $opasswd_file)" = "root:root" ] && [ "$(stat -c %a $opasswd_file)" = "600" ]; then
+        echo "Password history file '$opasswd_file' created with correct ownership and permissions." >> "$LOGFILE"
+    else
+        echo "Failed to create or set correct ownership and permissions for '$opasswd_file'." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the maximum user password age
+check_max_password_age() {
+    local shadow_file="/etc/shadow"
+    local max_age=60
+
+    echo "Checking if the SUSE operating system enforces a maximum user password age of $max_age days or less." >> "$LOGFILE"
+    local findings
+    findings=$(awk -F: -v max_age="$max_age" '$5 > max_age || $5 == "" {print $1 ":" $5}' "$shadow_file")
+
+    if [ -n "$findings" ]; then
+        echo "The following user accounts have a password age greater than $max_age days or are not set:" >> "$LOGFILE"
+        echo "$findings" >> "$LOGFILE"
+
+        # Fix the user accounts with invalid max password age
+        echo "$findings" | while IFS=: read -r user _; do
+            if ! id -u "$user" &>/dev/null || [ "$(id -u "$user")" -ge 1000 ]; then
+                echo "Setting max password age to $max_age days for user: $user" >> "$LOGFILE"
+                
+                transactional-update shell <<EOF
+chage -M $max_age $user
+exit
+EOF
+
+                if [ "$(chage -l $user | grep 'Maximum number of days between password change' | awk -F: '{print $2}' | xargs)" -le $max_age ]; then
+                    echo "Successfully set max password age to $max_age days for user: $user" >> "$LOGFILE"
+                else
+                    echo "Failed to set max password age for user: $user" >> "$LOGFILE"
+                fi
+            fi
+        done
+    else
+        echo "All user accounts have a password age of $max_age days or less." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the maximum password age configuration
+check_login_defs_max_password_age() {
+    local login_defs_file="/etc/login.defs"
+    local max_days=60
+
+    echo "Checking if 'PASS_MAX_DAYS' is set to $max_days days or less in $login_defs_file." >> "$LOGFILE"
+    local current_max_days
+    current_max_days=$(grep '^PASS_MAX_DAYS' "$login_defs_file" | awk '{print $2}')
+
+    if [ -z "$current_max_days" ] || [ "$current_max_days" -gt "$max_days" ]; then
+        echo "'PASS_MAX_DAYS' is not set or is greater than $max_days days." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+if grep -q '^PASS_MAX_DAYS' $login_defs_file; then
+    sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS $max_days/' $login_defs_file
+else
+    echo "PASS_MAX_DAYS $max_days" >> $login_defs_file
+fi
+exit
+EOF
+
+        echo "Set 'PASS_MAX_DAYS' to $max_days days in $login_defs_file." >> "$LOGFILE"
+    else
+        echo "'PASS_MAX_DAYS' is already set to $max_days days or less in $login_defs_file." >> "$LOGFILE"
+    fi
+}
+
+# Function to enforce a minimum password age of 1 day for all user accounts
+set_min_password_age() {
+    echo "Enforcing a minimum password age of 1 day for all user accounts." >> "$LOGFILE"
+
+    # Get all user accounts with a UID >= 1000
+    users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd)
+
+    for user in $users; do
+        echo "Setting minimum password age to 1 day for user: $user" >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+passwd -n 1 $user
+exit
+EOF
+
+        # Verify the change
+        min_age=$(chage -l $user | grep "Minimum number of days between password change" | awk -F: '{print $2}' | xargs)
+        if [ "$min_age" -eq 1 ]; then
+            echo "Successfully set minimum password age to 1 day for user: $user" >> "$LOGFILE"
+        else
+            echo "Failed to set minimum password age for user: $user" >> "$LOGFILE"
+        fi
+    done
+}
+
+# Function to verify and fix the minimum password age configuration
+check_login_defs_min_password_age() {
+    local login_defs_file="/etc/login.defs"
+    local min_days=1
+
+    echo "Checking if 'PASS_MIN_DAYS' is set to $min_days day or greater in $login_defs_file." >> "$LOGFILE"
+    local current_min_days
+    current_min_days=$(grep '^PASS_MIN_DAYS' "$login_defs_file" | awk '{print $2}')
+
+    if [ -z "$current_min_days" ] || [ "$current_min_days" -lt "$min_days" ]; then
+        echo "'PASS_MIN_DAYS' is not set or is less than $min_days day." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+if grep -q '^PASS_MIN_DAYS' $login_defs_file; then
+    sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS $min_days/' $login_defs_file
+else
+    echo "PASS_MIN_DAYS $min_days" >> $login_defs_file
+fi
+exit
+EOF
+
+        echo "Set 'PASS_MIN_DAYS' to $min_days day in $login_defs_file." >> "$LOGFILE"
+    else
+        echo "'PASS_MIN_DAYS' is already set to $min_days day or greater in $login_defs_file." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix the SHA_CRYPT_* settings in /etc/login.defs
+check_sha_crypt_rounds() {
+    local login_defs_file="/etc/login.defs"
+    local min_rounds=5000
+    local sha_min_rounds="SHA_CRYPT_MIN_ROUNDS"
+    local sha_max_rounds="SHA_CRYPT_MAX_ROUNDS"
+
+    echo "Checking if 'SHA_CRYPT_MIN_ROUNDS' and 'SHA_CRYPT_MAX_ROUNDS' are set to $min_rounds or greater in $login_defs_file." >> "$LOGFILE"
+    
+    local current_min_rounds
+    local current_max_rounds
+    current_min_rounds=$(grep "^$sha_min_rounds" "$login_defs_file" | awk '{print $2}')
+    current_max_rounds=$(grep "^$sha_max_rounds" "$login_defs_file" | awk '{print $2}')
+
+    if { [ -n "$current_min_rounds" ] && [ "$current_min_rounds" -lt "$min_rounds" ]; } || 
+       { [ -n "$current_max_rounds" ] && [ "$current_max_rounds" -lt "$min_rounds" ]; } || 
+       { [ -z "$current_min_rounds" ] && [ -z "$current_max_rounds" ]; }; then
+
+        echo "'SHA_CRYPT_MIN_ROUNDS' or 'SHA_CRYPT_MAX_ROUNDS' is not set properly." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+if grep -q "^$sha_min_rounds" $login_defs_file; then
+    sed -i "s/^$sha_min_rounds.*/$sha_min_rounds $min_rounds/" $login_defs_file
+else
+    echo "$sha_min_rounds $min_rounds" >> $login_defs_file
+fi
+
+if grep -q "^$sha_max_rounds" $login_defs_file; then
+    sed -i "s/^$sha_max_rounds.*/$sha_max_rounds $min_rounds/" $login_defs_file
+else
+    echo "$sha_max_rounds $min_rounds" >> $login_defs_file
+fi
+exit
+EOF
+
+        echo "Set 'SHA_CRYPT_MIN_ROUNDS' and 'SHA_CRYPT_MAX_ROUNDS' to $min_rounds in $login_defs_file." >> "$LOGFILE"
+    else
+        echo "'SHA_CRYPT_MIN_ROUNDS' and 'SHA_CRYPT_MAX_ROUNDS' are already set to $min_rounds or greater in $login_defs_file." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify that interactive user passwords are using a strong cryptographic hash
+check_password_hashes() {
+    echo "Checking if interactive user passwords are using a strong cryptographic hash (SHA-512)." >> "$LOGFILE"
+
+    # Extract the password hashes from /etc/shadow
+    hashes=$(cut -d: -f2 /etc/shadow)
+    issue_found=0
+
+    for hash in $hashes; do
+        if [[ $hash != \$6\$* && $hash != "!" && $hash != "*" ]]; then
+            echo "Found a password hash that does not use SHA-512: $hash" >> "$LOGFILE"
+            issue_found=1
+        fi
+    done
+
+    if [ $issue_found -eq 1 ]; then
+        echo "One or more user accounts are using a weak cryptographic hash for passwords." >> "$LOGFILE"
+    else
+        echo "All interactive user passwords are using a strong cryptographic hash (SHA-512)." >> "$LOGFILE"
+    fi
+}
+
+# Function to verify and fix PAM configuration to use SHA512 for password hashing
+check_pam_unix_sha512() {
+    local pam_file="/etc/pam.d/common-password"
+    local pam_rule="password required pam_unix.so sha512"
+
+    echo "Checking if 'pam_unix.so' is configured to use SHA512 for password hashing." >> "$LOGFILE"
+    if ! grep -q 'password.*required.*pam_unix.so.*sha512' "$pam_file"; then
+        echo "'pam_unix.so' is not configured to use SHA512 or the rule is missing." >> "$LOGFILE"
+        
+        transactional-update shell <<EOF
+if grep -q 'pam_unix.so' $pam_file; then
+    sed -i '/pam_unix.so/ s/$/ sha512/' $pam_file
+else
+    echo "$pam_rule" >> $pam_file
+fi
+exit
+EOF
+
+        echo "Added or updated pam_unix rule to use sha512 in $pam_file." >> "$LOGFILE"
+    else
+        echo "'pam_unix.so' is already configured to use SHA512 for password hashing." >> "$LOGFILE"
+    fi
+}
+
 # Call the function
 install_packages
 expire_temporary_accounts
@@ -2096,3 +2379,13 @@ check_group_audit
 check_passwd_audit
 check_pam_cracklib
 check_pam_cracklib_special_char
+check_pam_cracklib_minlen
+configure_pam_pwhistory
+configure_password_history_file
+check_max_password_age
+check_login_defs_max_password_age
+set_min_password_age
+check_login_defs_min_password_age
+check_sha_crypt_rounds
+check_password_hashes
+check_pam_unix_sha512

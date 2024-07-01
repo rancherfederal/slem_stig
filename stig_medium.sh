@@ -1,2391 +1,1140 @@
 #!/bin/bash
 
-LOGFILE="STIG_findings_medium.log"
-DEFAULT_USER="defaultuser"
-DEFAULT_GROUP="defaultgroup"
+LOGFILE="stig_medium.log"
 
-# Function to install a list of packages using transactional-update
-install_packages() {
-    local packages=(
-        "pam_pkcs11"
-        "mozilla-nss"
-        "mozilla-nss-tools"
-        "pcsc-ccid"
-        # Add more packages here as needed
-    )
-    for package in "${packages[@]}"; do
-        echo "Installing package: $package" | tee -a "$LOGFILE"
-        if transactional-update pkg install -yl "$package" >> "$LOGFILE" 2>&1; then
-            echo "Successfully installed package: $package" | tee -a "$LOGFILE"
-        else
-            echo "Failed to install package: $package" | tee -a "$LOGFILE"
-        fi
-    done
+# Make a new logfile
+> "$LOGFILE"
+
+# Function to log messages
+log_message() {
+    local function_name=$1
+    local vuln_id=$2
+    local rule_id=$3
+    local message=$4
+    echo "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id | $message" >> "$LOGFILE"
 }
 
-# Function to set temporary accounts to expire in 72 hours
-expire_temporary_accounts() {
-    echo "Checking for temporary accounts to set expiration." | tee -a "$LOGFILE"
-    TEMPORARY_USERS=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd) # Adjust UID range if necessary
-    CURRENT_DATE=$(date +%s)
-    EXPIRATION_DATE=$(date -d "72 hours" +%s)
+# Function to configure the system logon banner with the Standard Mandatory DOD Notice and Consent Banner
+configure_logon_banner() {
+    local function_name="configure_logon_banner"
+    local vuln_id="V-261265"
+    local rule_id="SV-261265r996289"
 
-    for user in $TEMPORARY_USERS; do
-        USER_EXPIRATION=$(chage -l $user | grep "Account expires" | awk -F: '{print $2}' | xargs -I{} date -d {} +%s)
-        if [ -z "$USER_EXPIRATION" ] || [ "$USER_EXPIRATION" -gt "$EXPIRATION_DATE" ]; then
-            echo "Setting expiration for user: $user to 72 hours from now." | tee -a "$LOGFILE"
-            if chage -E $(date -d "72 hours" +%Y-%m-%d) $user >> "$LOGFILE" 2>&1; then
-                echo "Successfully set expiration for user: $user" | tee -a "$LOGFILE"
-            else
-                echo "Failed to set expiration for user: $user" | tee -a "$LOGFILE"
-            fi
-        fi
-    done
-}
+    local issue_file="/etc/issue"
+    local banner_text="You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.
 
-# Function to initialize AIDE
-initialize_aide() {
-    echo "Initializing AIDE." | tee -a "$LOGFILE"
-    if aide -i >> "$LOGFILE" 2>&1; then
-        echo "AIDE initialization successful." | tee -a "$LOGFILE"
-        if mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db >> "$LOGFILE" 2>&1; then
-            echo "AIDE database moved to /var/lib/aide/aide.db" | tee -a "$LOGFILE"
-        else
-            echo "Failed to move AIDE database." | tee -a "$LOGFILE"
-        fi
+By using this IS (which includes any device attached to this IS), you consent to the following conditions:
+
+- The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel misconduct (PM), law enforcement (LE), and counterintelligence (CI) investigations.
+
+- At any time, the USG may inspect and seize data stored on this IS.
+
+- Communications using, or data stored on, this IS are not private, are subject to routine monitoring, interception, and search, and may be disclosed or used for any USG-authorized purpose.
+
+- This IS includes security measures (e.g., authentication and access controls) to protect USG interests--not for your personal benefit or privacy.
+
+- Notwithstanding the above, using this IS does not constitute consent to PM, LE or CI investigative searching or monitoring of the content of privileged communications, or work product, related to personal representation or services by attorneys, psychotherapists, or clergy, and their assistants. Such communications and work product are private and confidential. See User Agreement for details."
+
+    echo "$banner_text" | sudo tee "$issue_file" > /dev/null
+
+    local current_banner
+    current_banner=$(cat "$issue_file")
+
+    if [[ "$current_banner" == "$banner_text" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Standard Mandatory DOD Notice and Consent Banner has been configured successfully in $issue_file."
     else
-        echo "AIDE initialization failed." | tee -a "$LOGFILE"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure the Standard Mandatory DOD Notice and Consent Banner in $issue_file. This is a finding."
     fi
 }
 
-# Function to ensure SSHD FIPS-validated key exchange algorithms
-configure_sshd_kex() {
-    local sshd_config="/etc/ssh/sshd_config"
-    local required_kex="ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256"
-    
-    echo "Checking SSHD KexAlgorithms configuration." | tee -a "$LOGFILE"
-    if grep -iq "^KexAlgorithms $required_kex" "$sshd_config"; then
-        echo "SSHD KexAlgorithms are correctly configured." | tee -a "$LOGFILE"
-    else
-        echo "Updating SSHD KexAlgorithms to FIPS-validated algorithms." | tee -a "$LOGFILE"
-        if grep -iq "^KexAlgorithms" "$sshd_config"; then
-            sed -i "s/^KexAlgorithms.*/KexAlgorithms $required_kex/" "$sshd_config"
-        else
-            echo "KexAlgorithms $required_kex" >> "$sshd_config"
-        fi
-        if systemctl restart sshd >> "$LOGFILE" 2>&1; then
-            echo "SSHD restarted successfully with updated KexAlgorithms." | tee -a "$LOGFILE"
-        else
-            echo "Failed to restart SSHD with updated KexAlgorithms." | tee -a "$LOGFILE"
-        fi
-    fi
-}
+# Function to restrict access to the kernel message buffer
+restrict_kernel_message_buffer() {
+    local function_name="restrict_kernel_message_buffer"
+    local vuln_id="V-261269"
+    local rule_id="SV-261269r996301"
 
-# Function to verify the operating system specifies only the default "include" directory for the /etc/sudoers file
-check_sudoers_include() {
-    local sudoers_file="/etc/sudoers"
-    local include_line="@includedir /etc/sudoers.d"
-    
-    echo "Checking /etc/sudoers for @includedir /etc/sudoers.d." | tee -a "$LOGFILE"
-    if grep -q "^@includedir /etc/sudoers.d" "$sudoers_file"; then
-        echo "Correct include directory found in /etc/sudoers." | tee -a "$LOGFILE"
-    else
-        echo "Updating /etc/sudoers to include the correct directory." | tee -a "$LOGFILE"
-        if grep -q "^@includedir" "$sudoers_file"; then
-            sed -i "s|^@includedir.*|$include_line|" "$sudoers_file"
-        else
-            echo "$include_line" >> "$sudoers_file"
-        fi
-        echo "Successfully updated /etc/sudoers to include @includedir /etc/sudoers.d." | tee -a "$LOGFILE"
-    fi
-}
+    local sysctl_conf_file="/etc/sysctl.conf"
+    local sysctl_conf_dirs=("/run/sysctl.d/" "/etc/sysctl.d/" "/usr/local/lib/sysctl.d/" "/usr/lib/sysctl.d/" "/lib/sysctl.d/")
+    local kernel_param="kernel.dmesg_restrict = 1"
 
-# Function to verify the system default permissions for all authenticated users
-check_umask() {
-    local login_defs="/etc/login.defs"
-    local umask_setting="UMASK 077"
-    
-    echo "Checking /etc/login.defs for UMASK setting." | tee -a "$LOGFILE"
-    if grep -iq "^UMASK 000" "$login_defs"; then
-        echo "UMASK is set to 000, which is a CAT I finding." | tee -a "$LOGFILE"
-    elif grep -iq "^UMASK 077" "$login_defs"; then
-        echo "UMASK is correctly set to 077." | tee -a "$LOGFILE"
+    if grep -q "^kernel.dmesg_restrict" "$sysctl_conf_file"; then
+        sudo sed -i 's/^kernel.dmesg_restrict.*/'"$kernel_param"'/' "$sysctl_conf_file"
     else
-        echo "Updating UMASK to 077 in /etc/login.defs." | tee -a "$LOGFILE"
-        if grep -iq "^UMASK" "$login_defs"; then
-            sed -i "s/^UMASK.*/$umask_setting/" "$login_defs"
-        else
-            echo "$umask_setting" >> "$login_defs"
-        fi
-        echo "Successfully updated UMASK to 077 in /etc/login.defs." | tee -a "$LOGFILE"
-    fi
-}
-
-# Function to verify all files and directories have a valid group and owner
-check_files_ownership() {
-    local filesystem_type="xfs"
-    local files_no_group
-    local files_no_user
-
-    echo "Checking for files and directories without a valid group." | tee -a "$LOGFILE"
-    files_no_group=$(sudo find / -fstype "$filesystem_type" -nogroup)
-    if [ -n "$files_no_group" ]; then
-        echo "Found files and directories without a valid group." | tee -a "$LOGFILE"
-        echo "$files_no_group" | while read -r file; do
-            echo "Fixing group for $file" | tee -a "$LOGFILE"
-            if sudo chown :"$DEFAULT_GROUP" "$file" >> "$LOGFILE" 2>&1; then
-                echo "Successfully fixed group for $file" | tee -a "$LOGFILE"
-            else
-                echo "Failed to fix group for $file" | tee -a "$LOGFILE"
-            fi
-        done
-    else
-        echo "No files or directories found without a valid group." | tee -a "$LOGFILE"
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
     fi
 
-    echo "Checking for files and directories without a valid owner." | tee -a "$LOGFILE"
-    files_no_user=$(sudo find / -fstype "$filesystem_type" -nouser)
-    if [ -n "$files_no_user" ]; then
-        echo "Found files and directories without a valid owner." | tee -a "$LOGFILE"
-        echo "$files_no_user" | while read -r file; do
-            echo "Fixing owner for $file" | tee -a "$LOGFILE"
-            if sudo chown "$DEFAULT_USER:" "$file" >> "$LOGFILE" 2>&1; then
-                echo "Successfully fixed owner for $file" | tee -a "$LOGFILE"
-            else
-                echo "Failed to fix owner for $file" | tee -a "$LOGFILE"
-            fi
-        done
-    else
-        echo "No files or directories found without a valid owner." | tee -a "$LOGFILE"
-    fi
-}
-
-# Function to verify that network interfaces are not in promiscuous mode unless approved by the ISSO
-check_promiscuous_mode() {
-    echo "Checking for network interfaces in promiscuous mode." | tee -a "$LOGFILE"
-    local interfaces_in_promiscuous_mode
-    interfaces_in_promiscuous_mode=$(ip link | grep -i promisc)
-    if [ -n "$interfaces_in_promiscuous_mode" ]; then
-        echo "Found network interfaces in promiscuous mode:" | tee -a "$LOGFILE"
-        echo "$interfaces_in_promiscuous_mode" | tee -a "$LOGFILE"
-        # Add logic here to check for ISSO approval and documentation if necessary
-        echo "Disabling promiscuous mode on the following interfaces:" | tee -a "$LOGFILE"
-        echo "$interfaces_in_promiscuous_mode" | awk -F: '{print $2}' | while read -r interface; do
-            echo "Disabling promiscuous mode on $interface" | tee -a "$LOGFILE"
-            if sudo ip link set "$interface" promisc off >> "$LOGFILE" 2>&1; then
-                echo "Successfully disabled promiscuous mode on $interface" | tee -a "$LOGFILE"
-            else
-                echo "Failed to disable promiscuous mode on $interface" | tee -a "$LOGFILE"
-            fi
-        done
-    else
-        echo "No network interfaces found in promiscuous mode." | tee -a "$LOGFILE"
-    fi
-}
-
-# Function to verify the SUSE operating system is not performing IPv4 and IPv6 packet forwarding
-check_ip_forwarding() {
-    echo "Checking if IPv6 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-    if sysctl net.ipv6.conf.default.forwarding &> /dev/null; then
-        local ipv6_default_forwarding
-        ipv6_default_forwarding=$(sysctl net.ipv6.conf.default.forwarding | awk '{print $3}')
-        if [ "$ipv6_default_forwarding" -eq 0 ]; then
-            echo "IPv6 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-        else
-            echo "IPv6 packet forwarding is enabled by default. Disabling it." | tee -a "$LOGFILE"
-            if sudo sysctl -w net.ipv6.conf.default.forwarding=0 >> "$LOGFILE" 2>&1; then
-                echo "Successfully disabled IPv6 packet forwarding by default." | tee -a "$LOGFILE"
-                echo "net.ipv6.conf.default.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            else
-                echo "Failed to disable IPv6 packet forwarding by default." | tee -a "$LOGFILE"
-            fi
-        fi
-    else
-        echo "IPv6 default forwarding configuration not found." | tee -a "$LOGFILE"
-    fi
-
-    echo "Checking if IPv6 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-    if sysctl net.ipv6.conf.all.forwarding &> /dev/null; then
-        local ipv6_all_forwarding
-        ipv6_all_forwarding=$(sysctl net.ipv6.conf.all.forwarding | awk '{print $3}')
-        if [ "$ipv6_all_forwarding" -eq 0 ]; then
-            echo "IPv6 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-        else
-            echo "IPv6 packet forwarding is enabled for all interfaces. Disabling it." | tee -a "$LOGFILE"
-            if sudo sysctl -w net.ipv6.conf.all.forwarding=0 >> "$LOGFILE" 2>&1; then
-                echo "Successfully disabled IPv6 packet forwarding for all interfaces." | tee -a "$LOGFILE"
-                echo "net.ipv6.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            else
-                echo "Failed to disable IPv6 packet forwarding for all interfaces." | tee -a "$LOGFILE"
-            fi
-        fi
-    else
-        echo "IPv6 all forwarding configuration not found." | tee -a "$LOGFILE"
-    fi
-
-    echo "Checking if IPv4 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-    if sysctl net.ipv4.conf.default.forwarding &> /dev/null; then
-        local ipv4_default_forwarding
-        ipv4_default_forwarding=$(sysctl net.ipv4.conf.default.forwarding | awk '{print $3}')
-        if [ "$ipv4_default_forwarding" -eq 0 ]; then
-            echo "IPv4 packet forwarding is disabled by default." | tee -a "$LOGFILE"
-        else
-            echo "IPv4 packet forwarding is enabled by default. Disabling it." | tee -a "$LOGFILE"
-            if sudo sysctl -w net.ipv4.conf.default.forwarding=0 >> "$LOGFILE" 2>&1; then
-                echo "Successfully disabled IPv4 packet forwarding by default." | tee -a "$LOGFILE"
-                echo "net.ipv4.conf.default.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            else
-                echo "Failed to disable IPv4 packet forwarding by default." | tee -a "$LOGFILE"
-            fi
-        fi
-    else
-        echo "IPv4 default forwarding configuration not found." | tee -a "$LOGFILE"
-    fi
-
-    echo "Checking if IPv4 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-    if sysctl net.ipv4.conf.all.forwarding &> /dev/null; then
-        local ipv4_all_forwarding
-        ipv4_all_forwarding=$(sysctl net.ipv4.conf.all.forwarding | awk '{print $3}')
-        if [ "$ipv4_all_forwarding" -eq 0 ]; then
-            echo "IPv4 packet forwarding is disabled for all interfaces." | tee -a "$LOGFILE"
-        else
-            echo "IPv4 packet forwarding is enabled for all interfaces. Disabling it." | tee -a "$LOGFILE"
-            if sudo sysctl -w net.ipv4.conf.all.forwarding=0 >> "$LOGFILE" 2>&1; then
-                echo "Successfully disabled IPv4 packet forwarding for all interfaces." | tee -a "$LOGFILE"
-                echo "net.ipv4.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            else
-                echo "Failed to disable IPv4 packet forwarding for all interfaces." | tee -a "$LOGFILE"
-            fi
-        fi
-    else
-        echo "IPv4 all forwarding configuration not found." | tee -a "$LOGFILE"
-    fi
-}
-
-# Function to verify IPv4 and IPv6 ICMP redirects are disabled
-check_icmp_redirects() {
-    echo "Checking if IPv4 ICMP redirects are disabled." | tee -a "$LOGFILE"
-    local ipv4_icmp_redirects
-    ipv4_icmp_redirects=$(sysctl net.ipv4.conf.all.accept_redirects | awk '{print $3}')
-    if [ "$ipv4_icmp_redirects" -eq 0 ]; then
-        echo "IPv4 ICMP redirects are disabled." | tee -a "$LOGFILE"
-    else
-        echo "IPv4 ICMP redirects are enabled. Disabling them." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv4.conf.all.accept_redirects=0 >> "$LOGFILE" 2>&1 && sudo sysctl -w net.ipv4.conf.default.accept_redirects=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv4 ICMP redirects." | tee -a "$LOGFILE"
-            echo "net.ipv4.conf.all.accept_redirects=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            echo "net.ipv4.conf.default.accept_redirects=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-        else
-            echo "Failed to disable IPv4 ICMP redirects." | tee -a "$LOGFILE"
-        fi
-    fi
-
-    echo "Checking if IPv6 ICMP redirects are disabled." | tee -a "$LOGFILE"
-    local ipv6_icmp_redirects
-    ipv6_icmp_redirects=$(sysctl net.ipv6.conf.all.accept_redirects | awk '{print $3}')
-    if [ "$ipv6_icmp_redirects" -eq 0 ]; then
-        echo "IPv6 ICMP redirects are disabled." | tee -a "$LOGFILE"
-    else
-        echo "IPv6 ICMP redirects are enabled. Disabling them." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv6.conf.all.accept_redirects=0 >> "$LOGFILE" 2>&1 && sudo sysctl -w net.ipv6.conf.default.accept_redirects=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv6 ICMP redirects." | tee -a "$LOGFILE"
-            echo "net.ipv6.conf.all.accept_redirects=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            echo "net.ipv6.conf.default.accept_redirects=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-        else
-            echo "Failed to disable IPv6 ICMP redirects." | tee -a "$LOGFILE"
-        fi
-    fi
-}
-
-# Function to ensure IPv4 and IPv6 source routing is disabled
-check_source_route() {
-    echo "Checking if IPv4 source routing is disabled." | tee -a "$LOGFILE"
-    local ipv4_source_route
-    ipv4_source_route=$(sysctl net.ipv4.conf.all.accept_source_route | awk '{print $3}')
-    if [ "$ipv4_source_route" -eq 0 ]; then
-        echo "IPv4 source routing is disabled." | tee -a "$LOGFILE"
-    else
-        echo "IPv4 source routing is enabled. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv4.conf.all.accept_source_route=0 >> "$LOGFILE" 2>&1 && sudo sysctl -w net.ipv4.conf.default.accept_source_route=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv4 source routing." | tee -a "$LOGFILE"
-            echo "net.ipv4.conf.all.accept_source_route=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            echo "net.ipv4.conf.default.accept_source_route=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-        else
-            echo "Failed to disable IPv4 source routing." | tee -a "$LOGFILE"
-        fi
-    fi
-
-    echo "Checking if IPv6 source routing is disabled." | tee -a "$LOGFILE"
-    local ipv6_source_route
-    ipv6_source_route=$(sysctl net.ipv6.conf.all.accept_source_route | awk '{print $3}')
-    if [ "$ipv6_source_route" -eq 0 ]; then
-        echo "IPv6 source routing is disabled." | tee -a "$LOGFILE"
-    else
-        echo "IPv6 source routing is enabled. Disabling it." | tee -a "$LOGFILE"
-        if sudo sysctl -w net.ipv6.conf.all.accept_source_route=0 >> "$LOGFILE" 2>&1 && sudo sysctl -w net.ipv6.conf.default.accept_source_route=0 >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled IPv6 source routing." | tee -a "$LOGFILE"
-            echo "net.ipv6.conf.all.accept_source_route=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-            echo "net.ipv6.conf.default.accept_source_route=0" | sudo tee -a /etc/sysctl.conf >> "$LOGFILE"
-        else
-            echo "Failed to disable IPv6 source routing." | tee -a "$LOGFILE"
-        fi
-    fi
-}
-
-# Function to configure SSH settings
-configure_ssh() {
-    local sshd_config="/etc/ssh/sshd_config"
-    
-    echo "Disabling SSH X11 forwarding and setting StrictModes to yes." | tee -a "$LOGFILE"
-    if grep -iq "^X11Forwarding" "$sshd_config"; then
-        sed -i "s/^X11Forwarding.*/X11Forwarding no/" "$sshd_config"
-    else
-        echo "X11Forwarding no" >> "$sshd_config"
-    fi
-    if grep -iq "^StrictModes" "$sshd_config"; then
-        sed -i "s/^StrictModes.*/StrictModes yes/" "$sshd_config"
-    else
-        echo "StrictModes yes" >> "$sshd_config"
-    fi
-
-    echo "Disabling known hosts authentication by setting IgnoreUserKnownHosts to yes." | tee -a "$LOGFILE"
-    if grep -iq "^IgnoreUserKnownHosts" "$sshd_config"; then
-        sed -i "s/^IgnoreUserKnownHosts.*/IgnoreUserKnownHosts yes/" "$sshd_config"
-    else
-        echo "IgnoreUserKnownHosts yes" >> "$sshd_config"
-    fi
-
-    echo "Verifying SSH private keys have mode 0600." | tee -a "$LOGFILE"
-    find /etc/ssh -type f -name 'ssh_host_*_key' -exec stat -c "%a %n" {} \; | while read -r mode file; do
-        if [ "$mode" -ne 600 ]; then
-            echo "File $file has mode $mode, changing to 0600." | tee -a "$LOGFILE"
-            if sudo chmod 0600 "$file" >> "$LOGFILE" 2>&1; then
-                echo "Successfully changed mode of $file to 0600." | tee -a "$LOGFILE"
-            else
-                echo "Failed to change mode of $file." | tee -a "$LOGFILE"
-            fi
+    for dir in "${sysctl_conf_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            sudo find "$dir" -type f -exec sed -i '/^kernel.dmesg_restrict/d' {} \;
         fi
     done
 
-    echo "Verifying SSH public keys have mode 0644." | tee -a "$LOGFILE"
-    find /etc/ssh -name 'ssh_host*key.pub' -exec stat -c "%a %n" {} \; | while read -r mode file; do
-        if [ "$mode" -gt 644 ]; then
-            echo "File $file has mode $mode, changing to 0644." | tee -a "$LOGFILE"
-            if sudo chmod 0644 "$file" >> "$LOGFILE" 2>&1; then
-                echo "Successfully changed mode of $file to 0644." | tee -a "$LOGFILE"
-            else
-                echo "Failed to change mode of $file." | tee -a "$LOGFILE"
-            fi
-        fi
-    done
+    sudo sysctl --system
 
-    if systemctl restart sshd >> "$LOGFILE" 2>&1; then
-        echo "SSHD restarted successfully with updated settings." | tee -a "$LOGFILE"
+    local param_value
+    param_value=$(sysctl -n kernel.dmesg_restrict)
+
+    if [[ "$param_value" -eq 1 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Kernel message buffer access has been restricted successfully."
     else
-        echo "Failed to restart SSHD with updated settings." | tee -a "$LOGFILE"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to restrict kernel message buffer access. This is a finding."
     fi
 }
 
-# Function to copy PAM configuration files to static locations and remove soft links
-# and to verify the system is not configured to bypass password requirements for privilege escalation
-check_and_fix_pam() {
-    echo "Copying PAM configuration files to their static locations and removing soft links." | tee -a "$LOGFILE"
-    
-    sudo sh -c 'for X in /etc/pam.d/common-*-pc; do
-        echo "Copying $X to ${X:0:-3}" | tee -a "'$LOGFILE'"
-        if cp -ivp --remove-destination "$X" "${X:0:-3}" >> "'$LOGFILE'" 2>&1; then
-            echo "Successfully copied $X to ${X:0:-3}" | tee -a "'$LOGFILE'"
-        else
-            echo "Failed to copy $X to ${X:0:-3}" | tee -a "'$LOGFILE'"
-        fi
-    done'
-
-    echo "Verifying the SUSE operating system is configured to not overwrite PAM configuration on package changes." | tee -a "$LOGFILE"
-    echo "Checking for soft links between PAM configuration files." | tee -a "$LOGFILE"
-    local pam_links
-    pam_links=$(find /etc/pam.d/ -type l -iname "common-*")
-
-    if [ -n "$pam_links" ]; then
-        echo "Found soft links between PAM configuration files:" | tee -a "$LOGFILE"
-        echo "$pam_links" | tee -a "$LOGFILE"
-        echo "$pam_links" | while read -r link; do
-            echo "Removing soft link: $link" | tee -a "$LOGFILE"
-            if rm "$link" >> "$LOGFILE" 2>&1; then
-                echo "Successfully removed soft link: $link" | tee -a "$LOGFILE"
-            else
-                echo "Failed to remove soft link: $link" | tee -a "$LOGFILE"
-            fi
-        done
-    else
-        echo "No soft links found between PAM configuration files." | tee -a "$LOGFILE"
-    fi
-
-    echo "Verifying the SUSE operating system enforces a delay of at least four seconds between logon prompts following a failed logon attempt." | tee -a "$LOGFILE"
-    if grep -q "pam_faildelay" /etc/pam.d/common-auth; then
-        if grep -q "pam_faildelay.so delay=4000000" /etc/pam.d/common-auth; then
-            echo "The delay is correctly set to 4000000 microseconds." | tee -a "$LOGFILE"
-        else
-            echo "The delay is not set correctly. Updating the delay to 4000000 microseconds." | tee -a "$LOGFILE"
-            if sed -i '/pam_faildelay/s/.*/auth required pam_faildelay.so delay=4000000/' /etc/pam.d/common-auth >> "$LOGFILE" 2>&1; then
-                echo "Successfully updated the delay to 4000000 microseconds." | tee -a "$LOGFILE"
-            else
-                echo "Failed to update the delay." | tee -a "$LOGFILE"
-            fi
-        fi
-    else
-        echo "The pam_faildelay line is missing. Adding the delay setting." | tee -a "$LOGFILE"
-        if echo "auth required pam_faildelay.so delay=4000000" >> /etc/pam.d/common-auth; then
-            echo "Successfully added the delay setting." | tee -a "$LOGFILE"
-        else
-            echo "Failed to add the delay setting." | tee -a "$LOGFILE"
-        fi
-    fi
-
-    echo "Checking /etc/pam.d/sudo for pam_succeed_if." | tee -a "$LOGFILE"
-    if grep -iq "pam_succeed_if" /etc/pam.d/sudo; then
-        echo "Found pam_succeed_if in /etc/pam.d/sudo. Removing it." | tee -a "$LOGFILE"
-        if sed -i '/pam_succeed_if/d' /etc/pam.d/sudo >> "$LOGFILE" 2>&1; then
-            echo "Successfully removed pam_succeed_if from /etc/pam.d/sudo." | tee -a "$LOGFILE"
-        else
-            echo "Failed to remove pam_succeed_if from /etc/pam.d/sudo." | tee -a "$LOGFILE"
-        fi
-    else
-        echo "No pam_succeed_if entries found in /etc/pam.d/sudo." | tee -a "$LOGFILE"
-    fi
-}
-
-# Function to disable kdump.service and log it
+# Function to disable the kdump service if kernel core dumps are not required
 disable_kdump_service() {
-    echo "Checking if kdump.service is running." | tee -a "$LOGFILE"
-    if systemctl is-active --quiet kdump.service; then
-        echo "kdump.service is running. Disabling and stopping it." | tee -a "$LOGFILE"
+    local function_name="disable_kdump_service"
+    local vuln_id="V-261270"
+    local rule_id="SV-261270r996860"
 
-        if sudo systemctl stop kdump.service >> "$LOGFILE" 2>&1; then
-            echo "Successfully stopped kdump.service." | tee -a "$LOGFILE"
-        else
-            echo "Failed to stop kdump.service." | tee -a "$LOGFILE"
-        fi
+    local kdump_service_status
+    kdump_service_status=$(systemctl is-enabled kdump.service 2>/dev/null)
 
-        if sudo systemctl disable kdump.service >> "$LOGFILE" 2>&1; then
-            echo "Successfully disabled kdump.service." | tee -a "$LOGFILE"
-        else
-            echo "Failed to disable kdump.service." | tee -a "$LOGFILE"
-        fi
+    if [[ "$kdump_service_status" == "disabled" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "kdump.service is already disabled."
     else
-        echo "kdump.service is not running." | tee -a "$LOGFILE"
-    fi
-}
+        sudo systemctl disable kdump.service
 
-# Function to verify the SUSE operating system enforces a delay of at least four seconds between logon prompts following a failed logon attempt
-check_and_fix_fail_delay() {
-    echo "Verifying the SUSE operating system enforces a delay of at least four seconds between logon prompts following a failed logon attempt." | tee -a "$LOGFILE"
-
-    if grep -q "^FAIL_DELAY" /etc/login.defs; then
-        current_delay=$(grep "^FAIL_DELAY" /etc/login.defs | awk '{print $2}')
-        if [ "$current_delay" -eq 4 ]; then
-            echo "FAIL_DELAY is correctly set to 4 seconds." | tee -a "$LOGFILE"
+        kdump_service_status=$(systemctl is-enabled kdump.service 2>/dev/null)
+        if [[ "$kdump_service_status" == "disabled" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "kdump.service has been disabled successfully."
         else
-            echo "FAIL_DELAY is set to $current_delay seconds, updating to 4 seconds." | tee -a "$LOGFILE"
-            if sed -i 's/^FAIL_DELAY.*/FAIL_DELAY 4/' /etc/login.defs >> "$LOGFILE" 2>&1; then
-                echo "Successfully updated FAIL_DELAY to 4 seconds." | tee -a "$LOGFILE"
-            else
-                echo "Failed to update FAIL_DELAY." | tee -a "$LOGFILE"
-            fi
-        fi
-    else
-        echo "FAIL_DELAY is not set, adding FAIL_DELAY 4 to /etc/login.defs." | tee -a "$LOGFILE"
-        if echo "FAIL_DELAY 4" >> /etc/login.defs; then
-            echo "Successfully added FAIL_DELAY 4 to /etc/login.defs." | tee -a "$LOGFILE"
-        else
-            echo "Failed to add FAIL_DELAY 4 to /etc/login.defs." | tee -a "$LOGFILE"
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable kdump.service. This is a finding."
         fi
     fi
 }
 
-check_syscall_auditing() {
-    echo "Verifying syscall auditing has not been disabled." | tee -a "$LOGFILE"
+# Function to configure ASLR
+configure_aslr() {
+    local function_name="configure_aslr"
+    local vuln_id="V-261271"
+    local rule_id="SV-261271r996306"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="kernel.randomize_va_space=2"
+
+    sudo sysctl -w kernel.randomize_va_space=2
+
+    if grep -q "^kernel.randomize_va_space" "$sysctl_conf_file"; then
+        sudo sed -i 's/^kernel.randomize_va_space.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n kernel.randomize_va_space)
+
+    if [[ "$param_value" -eq 2 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "ASLR has been configured successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure ASLR. This is a finding."
+    fi
+}
+
+# Function to configure kernel to prevent leaking of internal addresses
+configure_kernel_address_leak_prevention() {
+    local function_name="configure_kernel_address_leak_prevention"
+    local vuln_id="V-261272"
+    local rule_id="SV-261272r996309"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="kernel.kptr_restrict=1"
+
+    sudo sysctl -w kernel.kptr_restrict=1
+
+    if grep -q "^kernel.kptr_restrict" "$sysctl_conf_file"; then
+        sudo sed -i 's/^kernel.kptr_restrict.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n kernel.kptr_restrict)
+
+    if [[ "$param_value" -eq 1 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Kernel address leak prevention has been configured successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure kernel address leak prevention. This is a finding."
+    fi
+}
+
+# Function to install applicable SLEM 5 patches and reboot
+install_slem_patches() {
+    local function_name="install_slem_patches"
+    local vuln_id="V-261273"
+    local rule_id="SV-261273r996311"
+
+    sudo transactional-update patch
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SLEM 5 patches have been installed successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install SLEM 5 patches. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to remove outdated software components after an update
+configure_remove_outdated_software() {
+    local function_name="configure_remove_outdated_software"
+    local vuln_id="V-261275"
+    local rule_id="SV-261275r996314"
+
+    local zypp_conf_file="/etc/zypp/zypp.conf"
+    local config_line="solver.upgradeRemoveDroppedPackages = true"
+
+    if grep -q "^solver.upgradeRemoveDroppedPackages" "$zypp_conf_file"; then
+        sudo sed -i 's/^solver.upgradeRemoveDroppedPackages.*/'"$config_line"'/' "$zypp_conf_file"
+    else
+        echo "$config_line" | sudo tee -a "$zypp_conf_file"
+    fi
+
+    local config_applied
+    config_applied=$(grep "^solver.upgradeRemoveDroppedPackages" "$zypp_conf_file")
+
+    if [[ "$config_applied" == "$config_line" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured to remove outdated software components after an update in $zypp_conf_file."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure removal of outdated software components in $zypp_conf_file. This is a finding."
+    fi
+}
+
+# Function to install the kbd package to allow users to lock the console
+install_kbd_package() {
+    local function_name="install_kbd_package"
+    local vuln_id="V-261276"
+    local rule_id="SV-261276r996316"
+
+    sudo transactional-update pkg install kbd
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "kbd package has been installed successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install kbd package. This is a finding."
+    fi
+}
+
+# Function to create a separate file system/partition for /var
+create_var_partition() {
+    local function_name="create_var_partition"
+    local vuln_id="V-261279"
+    local rule_id="SV-261279r996322"
+
+    local partition="/dev/sdY1"  # Replace with the actual partition
+    local mount_point="/var"
+
+    if mount | grep -q "on $mount_point"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "/var is already on a separate partition."
+        return
+    fi
+
+    sudo mkfs.ext4 "$partition"
+    sudo mount "$partition" /mnt
+
+    sudo rsync -av /var/ /mnt/
+    sudo mv /var /var.old
+    sudo mkdir /var
+    sudo umount /mnt
+    sudo mount "$partition" "$mount_point"
+
+    echo "$partition $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab
+
+    if mount | grep -q "on $mount_point"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "/var has been moved to a separate partition."
+        sudo rm -rf /var.old
+    else
+        sudo mv /var.old /var
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to move /var to a separate partition. This is a finding."
+    fi
+}
+
+# Function to create a separate file system/partition for nonprivileged local interactive user home directories
+create_home_partition() {
+    local function_name="create_home_partition"
+    local vuln_id="V-261278"
+    local rule_id="SV-261278r996320"
+
+    local partition="/dev/sdX1"
+    local mount_point="/home"
+
+    if mount | grep -q "on $mount_point"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "/home is already on a separate partition."
+        return
+    fi
+
+    sudo mkfs.ext4 "$partition"
+    sudo mkdir -p "$mount_point"
+    sudo mount "$partition" "$mount_point"
+
+    echo "$partition $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab
+
+    if mount | grep -q "on $mount_point"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Nonprivileged local interactive user home directories have been moved to a separate partition."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to move nonprivileged local interactive user home directories to a separate partition. This is a finding."
+    fi
+}
+
+# Function to migrate SLEM 5 audit data path onto a separate file system or partition
+migrate_audit_data() {
+    local function_name="migrate_audit_data"
+    local vuln_id="V-261280"
+    local rule_id="SV-261280r996324"
+
+    local partition="/dev/sdZ1"  # Replace with the actual partition
+    local mount_point="/var/log/audit"
+
+    if mount | grep -q "on $mount_point"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Audit data path is already on a separate partition."
+        return
+    fi
+
+    sudo mkfs.ext4 "$partition"
+    sudo mount "$partition" /mnt
+
+    sudo rsync -av /var/log/audit/ /mnt/
+    sudo mv /var/log/audit /var/log/audit.old
+    sudo mkdir /var/log/audit
+    sudo umount /mnt
+    sudo mount "$partition" "$mount_point"
+
+    echo "$partition $mount_point ext4 defaults 0 2" | sudo tee -a /etc/fstab
+
+    if mount | grep -q "on $mount_point"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Audit data path has been moved to a separate partition."
+        sudo rm -rf /var/log/audit.old
+    else
+        sudo mv /var/log/audit.old /var/log/audit
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to move audit data path to a separate partition. This is a finding."
+    fi
+}
+
+# Function to configure /etc/fstab to use the nosuid option for NFS file systems
+configure_fstab_nosuid_nfs() {
+    local function_name="configure_fstab_nosuid_nfs"
+    local vuln_id="V-261281"
+    local rule_id="SV-261281r996326"
+
+    if grep -q "nfs" /etc/fstab; then
+        sudo sed -i '/nfs/s/defaults/defaults,nosuid/' /etc/fstab
+        sudo mount -o remount -a
+
+        if grep -q "nfs" /etc/fstab | grep "nosuid"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configured /etc/fstab to use the nosuid option for NFS file systems."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure /etc/fstab to use the nosuid option for NFS file systems. This is a finding."
+        fi
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "No NFS file systems found in /etc/fstab."
+    fi
+}
+
+# Function to configure /etc/fstab to use the noexec option for NFS file systems
+configure_fstab_noexec_nfs() {
+    local function_name="configure_fstab_noexec_nfs"
+    local vuln_id="V-261282"
+    local rule_id="SV-261282r996328"
+
+    if grep -q "nfs" /etc/fstab; then
+        sudo sed -i '/nfs/s/defaults/defaults,noexec/' /etc/fstab
+        sudo mount -o remount -a
+
+        if grep -q "nfs" /etc/fstab | grep "noexec"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configured /etc/fstab to use the noexec option for NFS file systems."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure /etc/fstab to use the noexec option for NFS file systems. This is a finding."
+        fi
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "No NFS file systems found in /etc/fstab."
+    fi
+}
+
+# Function to configure /etc/fstab to use the nosuid option for file systems associated with removable media
+configure_fstab_nosuid_removable_media() {
+    local function_name="configure_fstab_nosuid_removable_media"
+    local vuln_id="V-261283"
+    local rule_id="SV-261283r996330"
+
+    if grep -q "removable" /etc/fstab; then
+        sudo sed -i '/removable/s/defaults/defaults,nosuid/' /etc/fstab
+        sudo mount -o remount -a
+
+        if grep -q "removable" /etc/fstab | grep "nosuid"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configured /etc/fstab to use the nosuid option for removable media file systems."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure /etc/fstab to use the nosuid option for removable media file systems. This is a finding."
+        fi
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "No removable media file systems found in /etc/fstab."
+    fi
+}
+
+# Function to configure /etc/fstab to use the nosuid option for user home directories
+configure_fstab_nosuid_home() {
+    local function_name="configure_fstab_nosuid_home"
+    local vuln_id="V-261285"
+    local rule_id="SV-261285r996838"
+
+    if grep -q "/home" /etc/fstab; then
+        sudo sed -i '/\/home/s/defaults/defaults,nosuid/' /etc/fstab
+        sudo mount -o remount /home
+
+        if grep -q "/home" /etc/fstab | grep "nosuid"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configured /etc/fstab to use the nosuid option for user home directories."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure /etc/fstab to use the nosuid option for user home directories. This is a finding."
+        fi
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "No user home directories found in /etc/fstab."
+    fi
+}
+
+# Function to disable the ability to automount devices by stopping and disabling the autofs service
+disable_automount() {
+    local function_name="disable_automount"
+    local vuln_id="V-261286"
+    local rule_id="SV-261286r996338"
+
+    sudo systemctl stop autofs
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "autofs service stopped successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to stop autofs service. This is a finding."
+        return
+    fi
+
+    sudo systemctl disable autofs
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "autofs service disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable autofs service. This is a finding."
+    fi
+}
+
+# Function to configure the system commands to be protected from unauthorized access
+protect_system_commands() {
+    local function_name="protect_system_commands"
+    local vuln_id="V-261287 & V-261288"
+    local rule_id="SV-261287r996341 & SV-261288r996344"
+
+    sudo find -L /usr/local/bin /usr/local/sbin -perm /022 -type f -exec chmod 755 '{}' \;
+    sudo find -L /bin /sbin /usr/bin /usr/sbin -perm /022 -type f -exec chmod 755 '{}' \;
     
-    local auditctl_output
-    auditctl_output=$(auditctl -l | grep -i "a task,never")
-    
-    if [ -n "$auditctl_output" ]; then
-        echo "Syscall auditing has been disabled by a rule: $auditctl_output" | tee -a "$LOGFILE"
-        echo "This is a finding. Please manually inspect and correct the configuration." | tee -a "$LOGFILE"
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "System commands have been protected from unauthorized access."
     else
-        echo "Syscall auditing is correctly configured." | tee -a "$LOGFILE"
-    fi
-
-    echo "Verifying the default rule '-a task,never' is not statically defined." | tee -a "$LOGFILE"
-    
-    local static_rule
-    static_rule=$(grep -rv "^#" /etc/audit/rules.d/ | grep -i "a task,never")
-    
-    if [ -n "$static_rule" ]; then
-        echo "Found static definition of '-a task,never' in audit rules: $static_rule" | tee -a "$LOGFILE"
-        echo "Removing the static definition of '-a task,never'." | tee -a "$LOGFILE"
-        if sed -i '/a task,never/d' /etc/audit/rules.d/* >> "$LOGFILE" 2>&1; then
-            echo "Successfully removed the static definition of '-a task,never'." | tee -a "$LOGFILE"
-            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
-                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
-            else
-                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
-            fi
-        else
-            echo "Failed to remove the static definition of '-a task,never'." | tee -a "$LOGFILE"
-        fi
-    else
-        echo "No static definition of '-a task,never' found in audit rules." | tee -a "$LOGFILE"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to protect system commands from unauthorized access. This is a finding."
     fi
 }
 
-# Function to verify auditing for /var/log/btmp, /var/log/wtmp, /run/utmp, and specific system calls
-check_and_fix_audit_logs() {
-    echo "Verifying if /var/log/btmp, /var/log/wtmp, and /run/utmp are being audited." | tee -a "$LOGFILE"
+# Function to configure the library files to be protected from unauthorized access
+protect_library_files() {
+    local function_name="protect_library_files"
+    local vuln_id="V-261289 & V-261290"
+    local rule_id="SV-261289r996347 & SV-261290r996350"
 
-    # Check /var/log/btmp
-    local btmp_audit_rule
-    btmp_audit_rule=$(auditctl -l | grep -w '/var/log/btmp')
+    sudo find /lib /lib64 /usr/lib /usr/lib64 -perm /022 -type f -exec chmod 755 '{}' \;
 
-    if [ -n "$btmp_audit_rule" ]; then
-        echo "/var/log/btmp is being audited." | tee -a "$LOGFILE"
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Library files have been protected from unauthorized access."
     else
-        echo "/var/log/btmp is not being audited. Adding audit rule." | tee -a "$LOGFILE"
-        if echo "-w /var/log/btmp -p wa -k login_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
-            echo "Successfully added audit rule for /var/log/btmp." | tee -a "$LOGFILE"
-            if auditctl -w /var/log/btmp -p wa -k login_mod >> "$LOGFILE" 2>&1; then
-                echo "Successfully applied audit rule for /var/log/btmp." | tee -a "$LOGFILE"
-            else
-                echo "Failed to apply audit rule for /var/log/btmp." | tee -a "$LOGFILE"
-            fi
-            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
-                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
-            else
-                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
-            fi
-        else
-            echo "Failed to add audit rule for /var/log/btmp." | tee -a "$LOGFILE"
-        fi
-    fi
-
-    # Check /var/log/wtmp
-    local wtmp_audit_rule
-    wtmp_audit_rule=$(auditctl -l | grep -w '/var/log/wtmp')
-
-    if [ -n "$wtmp_audit_rule" ]; then
-        echo "/var/log/wtmp is being audited." | tee -a "$LOGFILE"
-    else
-        echo "/var/log/wtmp is not being audited. Adding audit rule." | tee -a "$LOGFILE"
-        if echo "-w /var/log/wtmp -p wa -k login_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
-            echo "Successfully added audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
-            if auditctl -w /var/log/wtmp -p wa -k login_mod >> "$LOGFILE" 2>&1; then
-                echo "Successfully applied audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
-            else
-                echo "Failed to apply audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
-            fi
-            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
-                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
-            else
-                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
-            fi
-        else
-            echo "Failed to add audit rule for /var/log/wtmp." | tee -a "$LOGFILE"
-        fi
-    fi
-
-    # Check /run/utmp
-    local utmp_audit_rule
-    utmp_audit_rule=$(auditctl -l | grep -w '/run/utmp')
-
-    if [ -n "$utmp_audit_rule" ]; then
-        echo "/run/utmp is being audited." | tee -a "$LOGFILE"
-    else
-        echo "/run/utmp is not being audited. Adding audit rule." | tee -a "$LOGFILE"
-        if echo "-w /run/utmp -p wa -k login_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
-            echo "Successfully added audit rule for /run/utmp." | tee -a "$LOGFILE"
-            if auditctl -w /run/utmp -p wa -k login_mod >> "$LOGFILE" 2>&1; then
-                echo "Successfully applied audit rule for /run/utmp." | tee -a "$LOGFILE"
-            else
-                echo "Failed to apply audit rule for /run/utmp." | tee -a "$LOGFILE"
-            fi
-            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
-                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
-            else
-                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
-            fi
-        else
-            echo "Failed to add audit rule for /run/utmp." | tee -a "$LOGFILE"
-        fi
-    fi
-
-    # Check unlink, unlinkat, rename, renameat, rmdir system calls
-    local syscall_audit_rule
-    syscall_audit_rule=$(auditctl -l | grep 'unlink\|rename\|rmdir')
-
-    if [[ ! "$syscall_audit_rule" =~ "arch=b32" ]] || [[ ! "$syscall_audit_rule" =~ "arch=b64" ]]; then
-        echo "System calls unlink, unlinkat, rename, renameat, rmdir are not being audited correctly. Adding audit rules." | tee -a "$LOGFILE"
-        if echo "-a always,exit -F arch=b32 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE" && \
-           echo "-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod" >> /etc/audit/rules.d/audit.rules 2>> "$LOGFILE"; then
-            echo "Successfully added audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
-            if auditctl -a always,exit -F arch=b32 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod >> "$LOGFILE" 2>&1 && \
-               auditctl -a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,rmdir -F auid>=1000 -F auid!=-1 -k perm_mod >> "$LOGFILE" 2>&1; then
-                echo "Successfully applied audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
-            else
-                echo "Failed to apply audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
-            fi
-            if systemctl restart auditd >> "$LOGFILE" 2>&1; then
-                echo "Auditd service restarted successfully." | tee -a "$LOGFILE"
-            else
-                echo "Failed to restart auditd service." | tee -a "$LOGFILE"
-            fi
-        else
-            echo "Failed to add audit rules for unlink, unlinkat, rename, renameat, rmdir system calls." | tee -a "$LOGFILE"
-        fi
-    else
-        echo "System calls unlink, unlinkat, rename, renameat, rmdir are being audited correctly." | tee -a "$LOGFILE"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to protect library files from unauthorized access. This is a finding."
     fi
 }
 
-# Function to verify that the "audit-audispd-plugins" package is installed and the "au-remote" plugin is enabled
-check_audit_audispd_plugins() {
-    local package_name="audit-audispd-plugins"
+# Function to change the mode of local interactive user's home directories to 750
+change_home_directory_permissions() {
+    local function_name="change_home_directory_permissions"
+    local vuln_id="V-261291"
+    local rule_id="SV-261291r996352"
 
-    echo "Checking if $package_name package is installed." >> "$LOGFILE"
-    if ! zypper info "$package_name" | grep -q "Installed: Yes"; then
-        echo "$package_name package is not installed. Installing it using transactional-update." >> "$LOGFILE"
-        if transactional-update pkg install -y "$package_name" >> "$LOGFILE" 2>&1; then
-            echo "Successfully installed $package_name." >> "$LOGFILE"
+    local user_home_dirs
+    user_home_dirs=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $6}' /etc/passwd)
+
+    for home_dir in $user_home_dirs; do
+        if [[ -d "$home_dir" ]]; then
+            sudo chmod 750 "$home_dir"
+            local mode
+            mode=$(stat -c "%a" "$home_dir")
+            if [[ "$mode" == "750" ]]; then
+                log_message "$function_name" "$vuln_id" "$rule_id" "Changed permissions of $home_dir to 750."
+            else
+                log_message "$function_name" "$vuln_id" "$rule_id" "Failed to change permissions of $home_dir to 750. This is a finding."
+            fi
         else
-            echo "Failed to install $package_name." >> "$LOGFILE"
-        fi
-    else
-        echo "$package_name package is already installed." >> "$LOGFILE"
-    fi
-
-    echo "Verifying the 'au-remote' plugin is enabled." >> "$LOGFILE"
-    if ! grep -q "^active = yes" /etc/audisp/plugins.d/au-remote.conf; then
-        echo "'au-remote' plugin is not enabled. Enabling it." >> "$LOGFILE"
-        transactional-update shell <<EOF
-        sed -i "s/^active.*/active = yes/" /etc/audisp/plugins.d/au-remote.conf
-        systemctl restart auditd
-EOF
-        echo "Enabled 'au-remote' plugin and restarted auditd." >> "$LOGFILE"
-    else
-        echo "'au-remote' plugin is already enabled." >> "$LOGFILE"
-    fi
-
-    if systemctl is-active --quiet auditd; then
-        echo "auditd service is active." >> "$LOGFILE"
-    else
-        echo "Failed to restart auditd service." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify AIDE configuration for audit tools
-check_aide_configuration() {
-    local aide_config_file="/etc/aide.conf"
-    local expected_entries=(
-        "/usr/sbin/auditctl p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-        "/usr/sbin/auditd p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-        "/usr/sbin/ausearch p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-        "/usr/sbin/aureport p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-        "/usr/sbin/autrace p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-        "/usr/sbin/audispd p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-        "/usr/sbin/augenrules p+i+n+u+g+s+b+acl+selinux+xattrs+sha512"
-    )
-
-    echo "Checking AIDE configuration for audit tools." >> "$LOGFILE"
-    local missing_entries=()
-
-    for entry in "${expected_entries[@]}"; do
-        if ! grep -Fxq "$entry" "$aide_config_file"; then
-            missing_entries+=("$entry")
+            log_message "$function_name" "$vuln_id" "$rule_id" "Home directory $home_dir does not exist. This is a finding."
         fi
     done
-
-    if [ ${#missing_entries[@]} -eq 0 ]; then
-        echo "AIDE is properly configured to protect the integrity of the audit tools." >> "$LOGFILE"
-    else
-        echo "AIDE is missing the following entries for audit tools:" >> "$LOGFILE"
-        printf "%s\n" "${missing_entries[@]}" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-        for entry in "${missing_entries[@]}"; do
-            echo "\$entry" >> $aide_config_file
-        done
-        exit
-EOF
-
-        echo "Added missing entries to $aide_config_file and restarting AIDE initialization." >> "$LOGFILE"
-        transactional-update --continue-init
-    fi
 }
 
-# Function to verify and fix permissions for SUSE audit tools
-check_audit_tools_permissions() {
-    local permissions_file="/etc/permissions.local"
-    local expected_permissions=(
-        "/usr/sbin/audispd root:root 0750"
-        "/usr/sbin/auditctl root:root 0750"
-        "/usr/sbin/auditd root:root 0750"
-        "/usr/sbin/ausearch root:root 0755"
-        "/usr/sbin/aureport root:root 0755"
-        "/usr/sbin/autrace root:root 0750"
-        "/usr/sbin/augenrules root:root 0750"
-    )
-
-    echo "Checking permissions in $permissions_file for audit tools." >> "$LOGFILE"
-    local missing_permissions=()
-
-    for permission in "${expected_permissions[@]}"; do
-        if ! grep -Fxq "$permission" "$permissions_file"; then
-            missing_permissions+=("$permission")
-        fi
-    done
-
-    if [ ${#missing_permissions[@]} -eq 0 ]; then
-        echo "All required permissions for audit tools are present in $permissions_file." >> "$LOGFILE"
-    else
-        echo "Missing the following permissions in $permissions_file:" >> "$LOGFILE"
-        printf "%s\n" "${missing_permissions[@]}" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-        for permission in "${missing_permissions[@]}"; do
-            echo "\$permission" >> $permissions_file
-        done
-        exit
-EOF
-
-        echo "Added missing permissions to $permissions_file." >> "$LOGFILE"
-    fi
-
-    echo "Verifying permissions using chkstat." >> "$LOGFILE"
-    local chkstat_output
-    chkstat_output=$(chkstat $permissions_file 2>&1)
-
-    if [ -z "$chkstat_output" ]; then
-        echo "All audit information files and folders have correct permissions." >> "$LOGFILE"
-    else
-        echo "Permissions issues found by chkstat:" >> "$LOGFILE"
-        echo "$chkstat_output" >> "$LOGFILE"
-        transactional-update shell <<EOF
-        chkstat --system --set
-        exit
-EOF
-        echo "Permissions fixed using chkstat." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix permissions for audit rules
-check_audit_rules_permissions() {
-    local permissions_file="/etc/permissions.local"
-    local expected_permissions=(
-        "/var/log/audit root:root 600"
-        "/var/log/audit/audit.log root:root 600"
-        "/etc/audit/audit.rules root:root 640"
-        "/etc/audit/rules.d/audit.rules root:root 640"
-    )
-
-    echo "Checking permissions in $permissions_file for audit rules." >> "$LOGFILE"
-    local missing_permissions=()
-
-    for permission in "${expected_permissions[@]}"; do
-        if ! grep -iFxq "$permission" "$permissions_file"; then
-            missing_permissions+=("$permission")
-        fi
-    done
-
-    if [ ${#missing_permissions[@]} -eq 0 ]; then
-        echo "All required permissions for audit rules are present in $permissions_file." >> "$LOGFILE"
-    else
-        echo "Missing the following permissions in $permissions_file:" >> "$LOGFILE"
-        printf "%s\n" "${missing_permissions[@]}" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-for permission in "${missing_permissions[@]}"; do
-    echo "\$permission" >> $permissions_file
-done
-EOF
-
-        echo "Added missing permissions to $permissions_file." >> "$LOGFILE"
-    fi
-
-    echo "Verifying permissions using chkstat." >> "$LOGFILE"
-    transactional-update shell <<EOF
-chkstat --system --set >> "$LOGFILE" 2>&1
-EOF
-
-    local chkstat_output
-    chkstat_output=$(chkstat $permissions_file 2>&1)
-
-    if [ -z "$chkstat_output" ]; then
-        echo "All audit information files and folders have correct permissions." >> "$LOGFILE"
-    else
-        echo "Permissions issues found by chkstat:" >> "$LOGFILE"
-        echo "$chkstat_output" >> "$LOGFILE"
-        transactional-update shell <<EOF
-chkstat --system --set >> "$LOGFILE" 2>&1
-EOF
-        echo "Permissions fixed using chkstat." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the disk_full_action setting in auditd.conf
-check_disk_full_action() {
-    local auditd_conf_file="/etc/audit/auditd.conf"
-    local valid_actions=("SYSLOG" "SINGLE" "HALT")
-
-    echo "Checking disk_full_action setting in $auditd_conf_file." >> "$LOGFILE"
-    local disk_full_action
-    disk_full_action=$(grep -E "^disk_full_action" "$auditd_conf_file" | awk -F= '{print $2}' | xargs)
-
-    if [[ ! " ${valid_actions[@]} " =~ " ${disk_full_action} " ]]; then
-        echo "Invalid or missing disk_full_action setting: $disk_full_action" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/^disk_full_action/d' $auditd_conf_file
-echo "disk_full_action = SYSLOG" >> $auditd_conf_file
-EOF
-
-        echo "Set disk_full_action to SYSLOG in $auditd_conf_file." >> "$LOGFILE"
-    else
-        echo "disk_full_action is correctly set to $disk_full_action." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix aliases in /etc/aliases
-check_aliases() {
-    local aliases_file="/etc/aliases"
-    local monitored_email="monitored@example.com"  # Replace with the actual monitored email account
-
-    echo "Checking postmaster alias in $aliases_file." >> "$LOGFILE"
-    local postmaster_alias
-    postmaster_alias=$(grep -i "^postmaster:" "$aliases_file" | awk -F: '{print $2}' | xargs)
-
-    if [ "$postmaster_alias" != "root" ]; then
-        echo "Invalid or missing postmaster alias: $postmaster_alias" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/^postmaster:/d' $aliases_file
-echo "postmaster: root" >> $aliases_file
-EOF
-
-        echo "Set postmaster alias to root in $aliases_file." >> "$LOGFILE"
-    else
-        echo "postmaster alias is correctly set to root." >> "$LOGFILE"
-    fi
-
-    echo "Checking root alias in $aliases_file." >> "$LOGFILE"
-    local root_alias
-    root_alias=$(grep -i "^root:" "$aliases_file" | awk -F: '{print $2}' | xargs)
-
-    if [ "$root_alias" != "$monitored_email" ]; then
-        echo "Invalid or missing root alias: $root_alias" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/^root:/d' $aliases_file
-echo "root: $monitored_email" >> $aliases_file
-EOF
-
-        echo "Set root alias to $monitored_email in $aliases_file." >> "$LOGFILE"
-    else
-        echo "root alias is correctly set to $monitored_email." >> "$LOGFILE"
-    fi
-
-    echo "Reloading aliases database." >> "$LOGFILE"
-    newaliases >> "$LOGFILE" 2>&1
-}
-
-# Function to verify and fix the action_mail_acct setting in auditd.conf
-check_action_mail_acct() {
-    local auditd_conf_file="/etc/audit/auditd.conf"
-    local expected_account="root"
-
-    echo "Checking action_mail_acct setting in $auditd_conf_file." >> "$LOGFILE"
-    local action_mail_acct
-    action_mail_acct=$(grep -E "^action_mail_acct" "$auditd_conf_file" | awk -F= '{print $2}' | xargs)
-
-    if [ "$action_mail_acct" != "$expected_account" ]; then
-        echo "Invalid or missing action_mail_acct setting: $action_mail_acct" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/^action_mail_acct/d' $auditd_conf_file
-echo "action_mail_acct = $expected_account" >> $auditd_conf_file
-exit
-EOF
-
-        echo "Set action_mail_acct to $expected_account in $auditd_conf_file." >> "$LOGFILE"
-    else
-        echo "action_mail_acct is correctly set to $expected_account." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "su" command
-check_su_command_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-priv_change"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'su' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/su' > /dev/null; then
-        echo "'su' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'su' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        systemctl restart auditd
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'su' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "delete_module" system call
-check_module_audit() {
-    local audit_rule_b32="-a always,exit -F arch=b32 -S init_module,finit_module -F auid>=1000 -F auid!=-1 -k moduleload"
-    local audit_rule_b64="-a always,exit -F arch=b64 -S init_module,finit_module -F auid>=1000 -F auid!=-1 -k moduleload"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'init_module' and 'finit_module' system calls are being audited." >> "$LOGFILE"
-    local missing_rules=false
-
-    if ! auditctl -l | grep -q "$audit_rule_b32"; then
-        echo "Missing audit rule for 'init_module' and 'finit_module' system calls (b32)." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if ! auditctl -l | grep -q "$audit_rule_b64"; then
-        echo "Missing audit rule for 'init_module' and 'finit_module' system calls (b64)." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if [ "$missing_rules" = true ]; then
-        transactional-update shell <<EOF
-echo "$audit_rule_b32" >> $audit_rules_file
-echo "$audit_rule_b64" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for 'init_module' and 'finit_module' system calls to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'init_module' and 'finit_module' system calls are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "delete_module" system call
-check_delete_module_audit() {
-    local audit_rule_b32="-a always,exit -F arch=b32 -S delete_module -F auid>=1000 -F auid!=-1 -k unload_module"
-    local audit_rule_b64="-a always,exit -F arch=b64 -S delete_module -F auid>=1000 -F auid!=-1 -k unload_module"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'delete_module' system call is being audited." >> "$LOGFILE"
-    local missing_rules=false
-
-    if ! auditctl -l | grep -q 'delete_module'; then
-        echo "Missing audit rule for 'delete_module' system call." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if [ "$missing_rules" = true ]; then
-        transactional-update shell <<EOF
-echo "$audit_rule_b32" >> $audit_rules_file
-echo "$audit_rule_b64" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for 'delete_module' system call to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'delete_module' system call is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "pam_timestamp_check" command
-check_pam_timestamp_check_audit() {
-    local audit_rule="-a always,exit -S all -F path=/sbin/pam_timestamp_check -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-pam_timestamp_check"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'pam_timestamp_check' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/sbin/pam_timestamp_check' > /dev/null; then
-        echo "'pam_timestamp_check' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'pam_timestamp_check' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'pam_timestamp_check' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "usermod" command
-check_usermod_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/sbin/usermod -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-usermod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'usermod' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/sbin/usermod' > /dev/null; then
-        echo "'usermod' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'usermod' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'usermod' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "passmass" command
-check_passmass_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/passmass -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-passmass"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'passmass' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/passmass' > /dev/null; then
-        echo "'passmass' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'passmass' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'passmass' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "lastlog" file
-check_lastlog_audit() {
-    local audit_rule="-w /var/log/lastlog -p wa -k logins"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'lastlog' file is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/var/log/lastlog' > /dev/null; then
-        echo "'lastlog' file is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'lastlog' file to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'lastlog' file is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "tallylog" file
-check_tallylog_audit() {
-    local audit_rule="-w /var/log/tallylog -p wa -k logins"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'tallylog' file is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/var/log/tallylog' > /dev/null; then
-        echo "'tallylog' file is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'tallylog' file to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'tallylog' file is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "rm" command
-check_rm_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/rm -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'rm' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/rm' > /dev/null; then
-        echo "'rm' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'rm' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'rm' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "chcon" command
-check_chcon_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/chcon -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'chcon' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/chcon' > /dev/null; then
-        echo "'chcon' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'chcon' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'chcon' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "chacl" command
-check_chacl_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/chacl -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'chacl' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/chacl' > /dev/null; then
-        echo "'chacl' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'chacl' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'chacl' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "setfacl" command
-check_setfacl_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/setfacl -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'setfacl' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/setfacl' > /dev/null; then
-        echo "'setfacl' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'setfacl' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'setfacl' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "chmod" command
-check_chmod_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/chmod -F perm=x -F auid>=1000 -F auid!=-1 -k prim_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'chmod' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/chmod' > /dev/null; then
-        echo "'chmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'chmod' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'chmod' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "kmod" command
-check_kmod_audit() {
-    local audit_rule="-w /usr/bin/kmod -p x -k modules"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'kmod' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/kmod' > /dev/null; then
-        echo "'kmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'kmod' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'kmod' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "modprobe" command
-check_modprobe_audit() {
-    local audit_rule="-w /sbin/modprobe -p x -k modules"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'modprobe' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/sbin/modprobe' > /dev/null; then
-        echo "'modprobe' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'modprobe' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'modprobe' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "rmmod" command
-check_rmmod_audit() {
-    local audit_rule="-w /sbin/rmmod -p x -k modules"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'rmmod' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/sbin/rmmod' > /dev/null; then
-        echo "'rmmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'rmmod' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'rmmod' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "insmod" command
-check_insmod_audit() {
-    local audit_rule="-w /sbin/insmod -p x -k modules"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'insmod' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/sbin/insmod' > /dev/null; then
-        echo "'insmod' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'insmod' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'insmod' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "sudoedit" command
-check_sudoedit_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/sudoedit -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-sudoedit"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'sudoedit' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/sudoedit' > /dev/null; then
-        echo "'sudoedit' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'sudoedit' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'sudoedit' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "chmod", "fchmod", and "fchmodat" system calls
-check_chmod_syscalls_audit() {
-    local audit_rule_b32="-a always,exit -F arch=b32 -S chmod,fchmod,fchmodat -F auid>=1000 -F auid!=-1 -k perm_mod"
-    local audit_rule_b64="-a always,exit -F arch=b64 -S chmod,fchmod,fchmodat -F auid>=1000 -F auid!=-1 -k perm_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'chmod', 'fchmod', and 'fchmodat' system calls are being audited." >> "$LOGFILE"
-    local missing_rules=false
-
-    if ! auditctl -l | grep -q 'chmod'; then
-        echo "Missing audit rule for 'chmod', 'fchmod', and 'fchmodat' system calls." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if [ "$missing_rules" = true ]; then
-        transactional-update shell <<EOF
-echo "$audit_rule_b32" >> $audit_rules_file
-echo "$audit_rule_b64" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for 'chmod', 'fchmod', and 'fchmodat' system calls to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'chmod', 'fchmod', and 'fchmodat' system calls are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "setxattr", "fsetxattr", "lsetxattr", "removexattr", "fremovexattr", and "lremovexattr" system calls
-check_xattr_syscalls_audit() {
-    local audit_rule_b32="-a always,exit -F arch=b32 -S setxattr,fsetxattr,lsetxattr,removexattr,fremovexattr,lremovexattr -F auid>=1000 -F auid!=-1 -k perm_mod"
-    local audit_rule_b64="-a always,exit -F arch=b64 -S setxattr,fsetxattr,lsetxattr,removexattr,fremovexattr,lremovexattr -F auid>=1000 -F auid!=-1 -k perm_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls are being audited." >> "$LOGFILE"
-    local missing_rules=false
-
-    if ! auditctl -l | grep -q 'xattr'; then
-        echo "Missing audit rule for 'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if [ "$missing_rules" = true ]; then
-        transactional-update shell <<EOF
-echo "$audit_rule_b32" >> $audit_rules_file
-echo "$audit_rule_b64" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for 'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'setxattr', 'fsetxattr', 'lsetxattr', 'removexattr', 'fremovexattr', and 'lremovexattr' system calls are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "creat", "open", "openat", "open_by_handle_at", "truncate", and "ftruncate" system calls
-check_open_truncate_syscalls_audit() {
-    local audit_rule_b32_perm="-a always,exit -F arch=b32 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=-1 -k perm_access"
-    local audit_rule_b64_perm="-a always,exit -F arch=b64 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=-1 -k perm_access"
-    local audit_rule_b32_acces="-a always,exit -F arch=b32 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=-1 -k perm_access"
-    local audit_rule_b64_acces="-a always,exit -F arch=b64 -S creat,open,openat,open_by_handle_at,truncate,ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=-1 -k perm_access"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls are being audited." >> "$LOGFILE"
-    local missing_rules=false
-
-    if ! auditctl -l | grep -q 'open\|truncate\|creat'; then
-        echo "Missing audit rule for 'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if [ "$missing_rules" = true ]; then
-        transactional-update shell <<EOF
-echo "$audit_rule_b32_perm" >> $audit_rules_file
-echo "$audit_rule_b64_perm" >> $audit_rules_file
-echo "$audit_rule_b32_acces" >> $audit_rules_file
-echo "$audit_rule_b64_acces" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for 'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'creat', 'open', 'openat', 'open_by_handle_at', 'truncate', and 'ftruncate' system calls are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to configure audit rules for access to /etc/sudoers and /etc/sudoers.d/
-configure_sudoers_audit() {
-    local audit_rule_sudoers="-w /etc/sudoers -p wa -k privileged-actions"
-    local audit_rule_sudoers_d="-w /etc/sudoers.d -p wa -k privileged-actions"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if access to '/etc/sudoers' and '/etc/sudoers.d/' is being audited." >> "$LOGFILE"
-    local missing_rules=false
-
-    if ! auditctl -l | grep -q '/etc/sudoers'; then
-        echo "Missing audit rule for '/etc/sudoers'." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if ! auditctl -l | grep -q '/etc/sudoers.d'; then
-        echo "Missing audit rule for '/etc/sudoers.d/'." >> "$LOGFILE"
-        missing_rules=true
-    fi
-
-    if [ "$missing_rules" = true ]; then
-        transactional-update shell <<EOF
-echo "$audit_rule_sudoers" >> $audit_rules_file
-echo "$audit_rule_sudoers_d" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for '/etc/sudoers' and '/etc/sudoers.d/' to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'/etc/sudoers' and '/etc/sudoers.d/' are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "crontab" command
-check_crontab_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/crontab -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-crontab"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'crontab' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/crontab' > /dev/null; then
-        echo "'crontab' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'crontab' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'crontab' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "chage" command
-check_chage_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/chage -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-chage"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'chage' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/chage' > /dev/null; then
-        echo "'chage' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'chage' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'chage' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-check_unix_chkpwd_audit() {
-    local audit_rule_unix_chkpwd="-a always,exit -S all -F path=/sbin/unix_chkpwd -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-unix-chkpwd"
-    local audit_rule_unix2_chkpwd="-a always,exit -S all -F path=/sbin/unix2_chkpwd -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-unix2-chkpwd"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'unix_chkpwd' and 'unix2_chkpwd' commands are being audited." >> "$LOGFILE"
-    if ! auditctl -l | egrep -w "(unix_chkpwd|unix2_chkpwd)" > /dev/null; then
-        echo "'unix_chkpwd' or 'unix2_chkpwd' commands are not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule_unix_chkpwd" >> $audit_rules_file
-echo "$audit_rule_unix2_chkpwd" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rules for 'unix_chkpwd' and 'unix2_chkpwd' commands to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'unix_chkpwd' and 'unix2_chkpwd' commands are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "passwd" command
-check_passwd_audit() {
-    local audit_rule="-a always,exit -S all -F path=/usr/bin/passwd -F perm=x -F auid>=1000 -F auid!=-1 -k privileged-passwd"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if the 'passwd' command is being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/usr/bin/passwd' > /dev/null; then
-        echo "'passwd' command is not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for 'passwd' command to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "'passwd' command is already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the status and enablement of the auditd service
-check_auditd_service() {
-    echo "Checking if the 'auditd' service is active and enabled." >> "$LOGFILE"
-    
-    local service_status=$(systemctl is-active auditd.service)
-    local service_enabled=$(systemctl is-enabled auditd.service)
-
-    if [ "$service_status" != "active" ] || [ "$service_enabled" != "enabled" ]; then
-        echo "'auditd' service is not active or not enabled." >> "$LOGFILE"
-
-        transactional-update shell <<EOF
-systemctl enable auditd.service
-systemctl start auditd.service
-exit
-EOF
-
-        echo "Enabled and started the 'auditd' service." >> "$LOGFILE"
-
-        # Verify the changes
-        service_status=$(systemctl is-active auditd.service)
-        service_enabled=$(systemctl is-enabled auditd.service)
-
-        if [ "$service_status" == "active" ] && [ "$service_enabled" == "enabled" ]; then
-            echo "'auditd' service is now active and enabled." >> "$LOGFILE"
-        else
-            echo "Failed to activate or enable the 'auditd' service." >> "$LOGFILE"
-        fi
-    else
-        echo "'auditd' service is already active and enabled." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "/etc/gshadow" file
-check_gshadow_audit() {
-    local audit_rule="-w /etc/gshadow -p wa -k account_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if modifications to '/etc/gshadow' are being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/etc/gshadow' > /dev/null; then
-        echo "Modifications to '/etc/gshadow' are not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for '/etc/gshadow' to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "Modifications to '/etc/gshadow' are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "/etc/security/opasswd" file
-check_opasswd_audit() {
-    local audit_rule="-w /etc/security/opasswd -p wa -k account_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if modifications to '/etc/security/opasswd' are being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/etc/security/opasswd' > /dev/null; then
-        echo "Modifications to '/etc/security/opasswd' are not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for '/etc/security/opasswd' to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "Modifications to '/etc/security/opasswd' are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "/etc/shadow" file
-check_shadow_audit() {
-    local audit_rule="-w /etc/shadow -p wa -k account_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if modifications to '/etc/shadow' are being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/etc/shadow' > /dev/null; then
-        echo "Modifications to '/etc/shadow' are not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for '/etc/shadow' to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "Modifications to '/etc/shadow' are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "/etc/group" file
-check_group_audit() {
-    local audit_rule="-w /etc/group -p wa -k account_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if modifications to '/etc/group' are being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/etc/group' > /dev/null; then
-        echo "Modifications to '/etc/group' are not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for '/etc/group' to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "Modifications to '/etc/group' are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix audit rules for the "/etc/passwd" file
-check_passwd_audit() {
-    local audit_rule="-w /etc/passwd -p wa -k account_mod"
-    local audit_rules_file="/etc/audit/rules.d/audit.rules"
-
-    echo "Checking if modifications to '/etc/passwd' are being audited." >> "$LOGFILE"
-    if ! auditctl -l | grep -w '/etc/passwd' > /dev/null; then
-        echo "Modifications to '/etc/passwd' are not being audited or audit rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$audit_rule" >> $audit_rules_file
-exit
-EOF
-
-        echo "Added audit rule for '/etc/passwd' to $audit_rules_file." >> "$LOGFILE"
-
-        # Restart the auditd service to apply the changes
-        transactional-update shell <<EOF
-systemctl restart auditd
-exit
-EOF
-
-        if systemctl is-active --quiet auditd; then
-            echo "auditd service restarted successfully." >> "$LOGFILE"
-        else
-            echo "Failed to restart auditd service." >> "$LOGFILE"
-        fi
-    else
-        echo "Modifications to '/etc/passwd' are already being audited." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the use of pam_cracklib for preventing dictionary words in passwords
-check_pam_cracklib() {
-    local pam_file="/etc/pam.d/common-password"
-    local pam_rule="password requisite pam_cracklib.so"
-
-    echo "Checking if 'pam_cracklib.so' is being used to prevent dictionary words in passwords." >> "$LOGFILE"
-    if ! grep -q 'pam_cracklib.so' "$pam_file"; then
-        echo "'pam_cracklib.so' is not being used or the rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$pam_rule" >> $pam_file
-exit
-EOF
-
-        echo "Added pam_cracklib rule to $pam_file." >> "$LOGFILE"
-    else
-        echo "'pam_cracklib.so' is already being used to prevent dictionary words in passwords." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the enforcement of password complexity by requiring at least one special character
-check_pam_cracklib_special_char() {
-    local pam_file="/etc/pam.d/common-password"
-    local pam_rule="password requisite pam_cracklib.so ocredit=-1"
-
-    echo "Checking if 'pam_cracklib.so' enforces password complexity by requiring at least one special character." >> "$LOGFILE"
-    if ! grep -q 'password .* pam_cracklib.so .* ocredit=-1' "$pam_file"; then
-        echo "'pam_cracklib.so' is not enforcing password complexity or the rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/pam_cracklib.so/d' $pam_file
-echo "$pam_rule" >> $pam_file
-exit
-EOF
-
-        echo "Added pam_cracklib rule with ocredit=-1 to $pam_file." >> "$LOGFILE"
-    else
-        echo "'pam_cracklib.so' is already enforcing password complexity by requiring at least one special character." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the enforcement of minimum 15-character password length
-check_pam_cracklib_minlen() {
-    local pam_file="/etc/pam.d/common-password"
-    local pam_rule="password requisite pam_cracklib.so minlen=15"
-
-    echo "Checking if 'pam_cracklib.so' enforces a minimum 15-character password length." >> "$LOGFILE"
-    if ! grep -q 'password .* pam_cracklib.so .* minlen=[0-9]*' "$pam_file"; then
-        echo "'pam_cracklib.so' is not enforcing minimum password length or the rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/pam_cracklib.so/d' $pam_file
-echo "$pam_rule" >> $pam_file
-exit
-EOF
-
-        echo "Added pam_cracklib rule with minlen=15 to $pam_file." >> "$LOGFILE"
-    else
-        local current_minlen
-        current_minlen=$(grep 'pam_cracklib.so' "$pam_file" | sed -n 's/.*minlen=\([0-9]*\).*/\1/p')
-        if [ "$current_minlen" -lt 15 ]; then
-            echo "Current minlen value ($current_minlen) is less than 15. Updating to 15." >> "$LOGFILE"
-            
-            transactional-update shell <<EOF
-sed -i 's/\(pam_cracklib.so.*minlen=\)[0-9]*/\115/' $pam_file
-exit
-EOF
-
-            echo "Updated pam_cracklib rule with minlen=15 in $pam_file." >> "$LOGFILE"
-        else
-            echo "Current minlen value ($current_minlen) is already 15 or more." >> "$LOGFILE"
-        fi
-    fi
-}
-
-# Function to configure password history to prohibit reuse for a minimum of five generations
-configure_pam_pwhistory() {
-    local pam_file="/etc/pam.d/common-password"
-    local pam_rule="password requisite pam_pwhistory.so remember=5 use_authtok"
-
-    echo "Configuring 'pam_pwhistory.so' to prohibit the reuse of a password for a minimum of five generations." >> "$LOGFILE"
-    
-    if grep -q 'pam_pwhistory.so' "$pam_file"; then
-        echo "Updating existing 'pam_pwhistory.so' configuration in $pam_file." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-sed -i '/pam_pwhistory.so/ s/$/ remember=5 use_authtok/' $pam_file
-exit
-EOF
-
-        echo "Updated 'pam_pwhistory.so' configuration to include 'remember=5 use_authtok' in $pam_file." >> "$LOGFILE"
-    else
-        echo "'pam_pwhistory.so' configuration not found. Adding it to $pam_file." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-echo "$pam_rule" >> $pam_file
-exit
-EOF
-
-        echo "Added 'pam_pwhistory.so' configuration with 'remember=5 use_authtok' to $pam_file." >> "$LOGFILE"
-    fi
-}
-
-# Function to create the password history file with appropriate ownership and permissions
-configure_password_history_file() {
-    local opasswd_file="/etc/security/opasswd"
-
-    echo "Configuring the password history file '$opasswd_file'." >> "$LOGFILE"
-    
-    transactional-update shell <<EOF
-touch $opasswd_file
-chown root:root $opasswd_file
-chmod 0600 $opasswd_file
-exit
-EOF
-
-    if [ -f "$opasswd_file" ] && [ "$(stat -c %U:%G $opasswd_file)" = "root:root" ] && [ "$(stat -c %a $opasswd_file)" = "600" ]; then
-        echo "Password history file '$opasswd_file' created with correct ownership and permissions." >> "$LOGFILE"
-    else
-        echo "Failed to create or set correct ownership and permissions for '$opasswd_file'." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the maximum user password age
-check_max_password_age() {
-    local shadow_file="/etc/shadow"
-    local max_age=60
-
-    echo "Checking if the SUSE operating system enforces a maximum user password age of $max_age days or less." >> "$LOGFILE"
-    local findings
-    findings=$(awk -F: -v max_age="$max_age" '$5 > max_age || $5 == "" {print $1 ":" $5}' "$shadow_file")
-
-    if [ -n "$findings" ]; then
-        echo "The following user accounts have a password age greater than $max_age days or are not set:" >> "$LOGFILE"
-        echo "$findings" >> "$LOGFILE"
-
-        # Fix the user accounts with invalid max password age
-        echo "$findings" | while IFS=: read -r user _; do
-            if ! id -u "$user" &>/dev/null || [ "$(id -u "$user")" -ge 1000 ]; then
-                echo "Setting max password age to $max_age days for user: $user" >> "$LOGFILE"
-                
-                transactional-update shell <<EOF
-chage -M $max_age $user
-exit
-EOF
-
-                if [ "$(chage -l $user | grep 'Maximum number of days between password change' | awk -F: '{print $2}' | xargs)" -le $max_age ]; then
-                    echo "Successfully set max password age to $max_age days for user: $user" >> "$LOGFILE"
+# Function to set the mode of local initialization files to 740
+set_init_file_permissions() {
+    local function_name="set_init_file_permissions"
+    local vuln_id="V-261292"
+    local rule_id="SV-261292r996354"
+
+    local user_home_dirs
+    user_home_dirs=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $6}' /etc/passwd)
+
+    for home_dir in $user_home_dirs; do
+        if [[ -d "$home_dir" ]]; then
+            local init_files
+            init_files=$(find "$home_dir" -maxdepth 1 -name ".*" -type f)
+
+            for init_file in $init_files; do
+                sudo chmod 740 "$init_file"
+                local mode
+                mode=$(stat -c "%a" "$init_file")
+                if [[ "$mode" == "740" ]]; then
+                    log_message "$function_name" "$vuln_id" "$rule_id" "Changed permissions of $init_file to 740."
                 else
-                    echo "Failed to set max password age for user: $user" >> "$LOGFILE"
+                    log_message "$function_name" "$vuln_id" "$rule_id" "Failed to change permissions of $init_file to 740. This is a finding."
                 fi
-            fi
-        done
-    else
-        echo "All user accounts have a password age of $max_age days or less." >> "$LOGFILE"
-    fi
-}
-
-# Function to verify and fix the maximum password age configuration
-check_login_defs_max_password_age() {
-    local login_defs_file="/etc/login.defs"
-    local max_days=60
-
-    echo "Checking if 'PASS_MAX_DAYS' is set to $max_days days or less in $login_defs_file." >> "$LOGFILE"
-    local current_max_days
-    current_max_days=$(grep '^PASS_MAX_DAYS' "$login_defs_file" | awk '{print $2}')
-
-    if [ -z "$current_max_days" ] || [ "$current_max_days" -gt "$max_days" ]; then
-        echo "'PASS_MAX_DAYS' is not set or is greater than $max_days days." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-if grep -q '^PASS_MAX_DAYS' $login_defs_file; then
-    sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS $max_days/' $login_defs_file
-else
-    echo "PASS_MAX_DAYS $max_days" >> $login_defs_file
-fi
-exit
-EOF
-
-        echo "Set 'PASS_MAX_DAYS' to $max_days days in $login_defs_file." >> "$LOGFILE"
-    else
-        echo "'PASS_MAX_DAYS' is already set to $max_days days or less in $login_defs_file." >> "$LOGFILE"
-    fi
-}
-
-# Function to enforce a minimum password age of 1 day for all user accounts
-set_min_password_age() {
-    echo "Enforcing a minimum password age of 1 day for all user accounts." >> "$LOGFILE"
-
-    # Get all user accounts with a UID >= 1000
-    users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd)
-
-    for user in $users; do
-        echo "Setting minimum password age to 1 day for user: $user" >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-passwd -n 1 $user
-exit
-EOF
-
-        # Verify the change
-        min_age=$(chage -l $user | grep "Minimum number of days between password change" | awk -F: '{print $2}' | xargs)
-        if [ "$min_age" -eq 1 ]; then
-            echo "Successfully set minimum password age to 1 day for user: $user" >> "$LOGFILE"
+            done
         else
-            echo "Failed to set minimum password age for user: $user" >> "$LOGFILE"
+            log_message "$function_name" "$vuln_id" "$rule_id" "Home directory $home_dir does not exist. This is a finding."
         fi
     done
 }
 
-# Function to verify and fix the minimum password age configuration
-check_login_defs_min_password_age() {
-    local login_defs_file="/etc/login.defs"
-    local min_days=1
+# Function to set the mode of SSH daemon public host key files to 644
+set_ssh_public_key_permissions() {
+    local function_name="set_ssh_public_key_permissions"
+    local vuln_id="V-261293"
+    local rule_id="SV-261293r996357"
 
-    echo "Checking if 'PASS_MIN_DAYS' is set to $min_days day or greater in $login_defs_file." >> "$LOGFILE"
-    local current_min_days
-    current_min_days=$(grep '^PASS_MIN_DAYS' "$login_defs_file" | awk '{print $2}')
+    local public_key_files
+    public_key_files=$(find /etc/ssh -type f -name "ssh_host*key.pub")
 
-    if [ -z "$current_min_days" ] || [ "$current_min_days" -lt "$min_days" ]; then
-        echo "'PASS_MIN_DAYS' is not set or is less than $min_days day." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-if grep -q '^PASS_MIN_DAYS' $login_defs_file; then
-    sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS $min_days/' $login_defs_file
-else
-    echo "PASS_MIN_DAYS $min_days" >> $login_defs_file
-fi
-exit
+    for key_file in $public_key_files; do
+        sudo chmod 644 "$key_file"
+        local mode
+        mode=$(stat -c "%a" "$key_file")
+        if [[ "$mode" == "644" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Changed permissions of $key_file to 644."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to change permissions of $key_file to 644. This is a finding."
+        fi
+    done
+}
+
+# Function to set the mode of SSH daemon private host key files to 640
+set_ssh_private_key_permissions() {
+    local function_name="set_ssh_private_key_permissions"
+    local vuln_id="V-261294"
+    local rule_id="SV-261294r996359"
+
+    local private_key_files
+    private_key_files=$(find /etc/ssh -type f -name "ssh_host*key" ! -name "*.pub")
+
+    for key_file in $private_key_files; do
+        sudo chmod 640 "$key_file"
+        local mode
+        mode=$(stat -c "%a" "$key_file")
+        if [[ "$mode" == "640" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Changed permissions of $key_file to 640."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to change permissions of $key_file to 640. This is a finding."
+        fi
+    done
+}
+
+# Function to configure the library files to be owned by root
+protect_library_files_ownership() {
+    local function_name="protect_library_files_ownership"
+    local vuln_id="V-261295"
+    local rule_id="SV-261295r996362"
+
+    sudo transactional-update shell <<EOF
+    sudo find /lib /lib64 /usr/lib /usr/lib64 ! -user root -type f -exec chown root '{}' \;
+    exit
 EOF
 
-        echo "Set 'PASS_MIN_DAYS' to $min_days day in $login_defs_file." >> "$LOGFILE"
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Library files ownership set to root successfully."
     else
-        echo "'PASS_MIN_DAYS' is already set to $min_days day or greater in $login_defs_file." >> "$LOGFILE"
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set library files ownership to root. This is a finding."
     fi
 }
 
-# Function to verify and fix the SHA_CRYPT_* settings in /etc/login.defs
-check_sha_crypt_rounds() {
-    local login_defs_file="/etc/login.defs"
-    local min_rounds=5000
-    local sha_min_rounds="SHA_CRYPT_MIN_ROUNDS"
-    local sha_max_rounds="SHA_CRYPT_MAX_ROUNDS"
+# Function to configure the library files to be in the root group
+protect_library_files_group() {
+    local function_name="protect_library_files_group"
+    local vuln_id="V-261296"
+    local rule_id="SV-261296r996365"
 
-    echo "Checking if 'SHA_CRYPT_MIN_ROUNDS' and 'SHA_CRYPT_MAX_ROUNDS' are set to $min_rounds or greater in $login_defs_file." >> "$LOGFILE"
+    sudo transactional-update shell <<EOF
+    sudo find /lib /lib64 /usr/lib /usr/lib64 ! -group root -type f -exec chgrp root '{}' \;
+    exit
+EOF
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Library files group set to root successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set library files group to root. This is a finding."
+    fi
+}
+
+# Function to configure the library directories to be owned by root
+protect_library_dirs_ownership() {
+    local function_name="protect_library_dirs_ownership"
+    local vuln_id="V-261297"
+    local rule_id="SV-261297r996368"
+
+    sudo transactional-update shell <<EOF
+    sudo find /lib /lib64 /usr/lib /usr/lib64 ! -user root -type d -exec chown root '{}' \;
+    exit
+EOF
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Library directories ownership set to root successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set library directories ownership to root. This is a finding."
+    fi
+}
+
+# Function to configure the library directories to be in the root group
+protect_library_dirs_group() {
+    local function_name="protect_library_dirs_group"
+    local vuln_id="V-261298"
+    local rule_id="SV-261298r996371"
+
+    sudo transactional-update shell <<EOF
+    sudo find /lib /lib64 /usr/lib /usr/lib64 ! -group root -type d -exec chgrp root '{}' \;
+    exit
+EOF
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Library directories group set to root successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set library directories group to root. This is a finding."
+    fi
+}
+
+# Function to configure the system commands to be owned by root
+protect_system_commands_ownership() {
+    local function_name="protect_system_commands_ownership"
+    local vuln_id="V-261299 & V-261300"
+    local rule_id="SV-261299r996373 & SV-261300r996375"
+
+    sudo transactional-update shell <<EOF
+    sudo find -L /bin /sbin /usr/bin /usr/sbin ! -user root -type f -exec chown root '{}' \;
+    exit
+EOF
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "System commands ownership set to root successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set system commands ownership to root. This is a finding."
+    fi
+}
+
+# Function to configure the system commands directories to be owned by root
+protect_system_commands_directory_ownership() {
+    local function_name="protect_system_commands_directory_ownership"
+    local vuln_id="V-261301"
+    local rule_id="SV-261301r996377"
+
+    sudo transactional-update shell <<EOF
+    sudo find -L /bin /sbin /usr/bin /usr/sbin ! -user root -type d -exec chown root '{}' \;
+    exit
+EOF
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "System commands directories ownership set to root successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set system commands directories ownership to root. This is a finding."
+    fi
+}
+
+# Function to configure the system commands directories to be in the root group
+protect_system_commands_directory_group() {
+    local function_name="protect_system_commands_directory_group"
+    local vuln_id="V-261302"
+    local rule_id="SV-261302r996380"
+
+    sudo transactional-update shell <<EOF
+    sudo find -L /bin /sbin /usr/bin /usr/sbin ! -group root -type d -exec chgrp root '{}' \;
+    exit
+EOF
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "System commands directories group set to root successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set system commands directories group to root. This is a finding."
+    fi
+}
+
+# Function to assign a valid user to unowned files and directories
+assign_valid_user_to_unowned_files() {
+    local function_name="assign_valid_user_to_unowned_files"
+    local vuln_id="V-261303"
+    local rule_id="SV-261303r996382"
+
+    local unowned_files
+    unowned_files=$(find / -nouser)
+
+    for file in $unowned_files; do
+        sudo chown root "$file"
+        local owner
+        owner=$(stat -c "%U" "$file")
+        if [[ "$owner" == "root" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Assigned root as owner to $file."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to assign owner to $file. This is a finding."
+        fi
+    done
+}
+
+# Function to assign a valid group to ungrouped files and directories
+assign_valid_group_to_ungrouped_files() {
+    local function_name="assign_valid_group_to_ungrouped_files"
+    local vuln_id="V-261304"
+    local rule_id="SV-261304r996384"
+
+    local ungrouped_files
+    ungrouped_files=$(find / -nogroup)
+
+    for file in $ungrouped_files; do
+        sudo chgrp root "$file"
+        local group
+        group=$(stat -c "%G" "$file")
+        if [[ "$group" == "root" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Assigned root as group to $file."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to assign group to $file. This is a finding."
+        fi
+    done
+}
+
+# Function to change the group owner of a local interactive user's home directory
+change_home_directory_group() {
+    local function_name="change_home_directory_group"
+    local vuln_id="V-261305"
+    local rule_id="SV-261305r996387"
+
+    local user_home_dirs
+    user_home_dirs=$(awk -F: '($3 >= 1000 && $7 != "/sbin/nologin" && $7 != "/bin/false") {print $1 ":" $6}' /etc/passwd)
+
+    for user_home in $user_home_dirs; do
+        local user
+        local home_dir
+        IFS=: read -r user home_dir <<< "$user_home"
+        local group
+        group=$(id -gn "$user")
+
+        if [[ -d "$home_dir" ]]; then
+            sudo chgrp "$group" "$home_dir"
+            local current_group
+            current_group=$(stat -c "%G" "$home_dir")
+            if [[ "$current_group" == "$group" ]]; then
+                log_message "$function_name" "$vuln_id" "$rule_id" "Changed group of $home_dir to $group."
+            else
+                log_message "$function_name" "$vuln_id" "$rule_id" "Failed to change group of $home_dir to $group. This is a finding."
+            fi
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Home directory $home_dir does not exist. This is a finding."
+        fi
+    done
+}
+
+# Function to change the group of world-writable directories to root
+change_group_of_world_writable_directories() {
+    local function_name="change_group_of_world_writable_directories"
+    local vuln_id="V-261306"
+    local rule_id="SV-261306r996389"
+
+    local world_writable_dirs
+    world_writable_dirs=$(find / -type d -perm -002 2>/dev/null)
+
+    for dir in $world_writable_dirs; do
+        sudo chgrp root "$dir"
+        local group
+        group=$(stat -c "%G" "$dir")
+        if [[ "$group" == "root" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Changed group of $dir to root."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to change group of $dir to root. This is a finding."
+        fi
+    done
+}
+
+# Function to set the sticky bit on world-writable directories
+set_sticky_bit_on_world_writable_directories() {
+    local function_name="set_sticky_bit_on_world_writable_directories"
+    local vuln_id="V-261307"
+    local rule_id="SV-261307r996392"
+
+    local world_writable_dirs
+    world_writable_dirs=$(find / -type d -perm -002 2>/dev/null)
+
+    for dir in $world_writable_dirs; do
+        sudo chmod 1777 "$dir"
+        local mode
+        mode=$(stat -c "%a" "$dir")
+        if [[ "$mode" == "1777" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Set sticky bit on $dir."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set sticky bit on $dir. This is a finding."
+        fi
+    done
+}
+
+# Function to prevent unauthorized access to system error messages
+prevent_unauthorized_access_to_error_messages() {
+    local function_name="prevent_unauthorized_access_to_error_messages"
+    local vuln_id="V-261308"
+    local rule_id="SV-261308r996395"
+
+    sudo sed -i '/\/var\/log\/messages/d' /etc/permissions.local
+    echo "/var/log/messages root:root 640" | sudo tee -a /etc/permissions.local
+
+    sudo chkstat --set --system
+
+    local permissions
+    permissions=$(stat -c "%a" /var/log/messages)
+    local owner
+    owner=$(stat -c "%U:%G" /var/log/messages)
+
+    if [[ "$permissions" == "640" && "$owner" == "root:root" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Set permissions of /var/log/messages to root:root 640."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set permissions of /var/log/messages to root:root 640. This is a finding."
+    fi
+}
+
+# Function to set permissions of log files to 640
+set_log_files_permissions() {
+    local function_name="set_log_files_permissions"
+    local vuln_id="V-261309"
+    local rule_id="SV-261309r996398"
+
+    sudo find /var/log -perm /137 ! -name '*[bw]tmp' ! -name '*lastlog' -type f -exec chmod 640 '{}' \;
+
+    local incorrect_permissions
+    incorrect_permissions=$(find /var/log -perm /137 ! -name '*[bw]tmp' ! -name '*lastlog' -type f)
+
+    if [[ -z "$incorrect_permissions" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "Set permissions of all log files under /var/log to 640."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set permissions of some log files under /var/log. This is a finding."
+    fi
+}
+
+# Function to configure firewalld and enable panic mode
+configure_firewalld_and_panic_mode() {
+    local function_name="configure_firewalld_and_panic_mode"
+    local vuln_id="V-261310"
+    local rule_id="SV-261310r996401"
+
+    sudo systemctl enable firewalld.service --now
+
+    if [[ $? -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "firewalld.service enabled and started successfully."
+        sudo firewall-cmd --panic-on
+        log_message "$function_name" "$vuln_id" "$rule_id" "Firewall set to panic mode."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to enable and start firewalld.service. This is a finding."
+    fi
+}
+
+# Function to configure system clock to synchronize with an authoritative DOD time source
+configure_clock_synchronization() {
+    local function_name="configure_clock_synchronization"
+    local vuln_id="V-261311"
+    local rule_id="SV-261311r996404"
     
-    local current_min_rounds
-    local current_max_rounds
-    current_min_rounds=$(grep "^$sha_min_rounds" "$login_defs_file" | awk '{print $2}')
-    current_max_rounds=$(grep "^$sha_max_rounds" "$login_defs_file" | awk '{print $2}')
+    local chrony_conf_file="/etc/chrony.conf"
+    local time_source="<time_source>"  # Replace with the actual authoritative DOD time source
 
-    if { [ -n "$current_min_rounds" ] && [ "$current_min_rounds" -lt "$min_rounds" ]; } || 
-       { [ -n "$current_max_rounds" ] && [ "$current_max_rounds" -lt "$min_rounds" ]; } || 
-       { [ -z "$current_min_rounds" ] && [ -z "$current_max_rounds" ]; }; then
-
-        echo "'SHA_CRYPT_MIN_ROUNDS' or 'SHA_CRYPT_MAX_ROUNDS' is not set properly." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-if grep -q "^$sha_min_rounds" $login_defs_file; then
-    sed -i "s/^$sha_min_rounds.*/$sha_min_rounds $min_rounds/" $login_defs_file
-else
-    echo "$sha_min_rounds $min_rounds" >> $login_defs_file
-fi
-
-if grep -q "^$sha_max_rounds" $login_defs_file; then
-    sed -i "s/^$sha_max_rounds.*/$sha_max_rounds $min_rounds/" $login_defs_file
-else
-    echo "$sha_max_rounds $min_rounds" >> $login_defs_file
-fi
-exit
-EOF
-
-        echo "Set 'SHA_CRYPT_MIN_ROUNDS' and 'SHA_CRYPT_MAX_ROUNDS' to $min_rounds in $login_defs_file." >> "$LOGFILE"
+    if grep -q "server $time_source maxpoll 16" "$chrony_conf_file"; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "System clock already configured to synchronize with $time_source."
     else
-        echo "'SHA_CRYPT_MIN_ROUNDS' and 'SHA_CRYPT_MAX_ROUNDS' are already set to $min_rounds or greater in $login_defs_file." >> "$LOGFILE"
+        echo "server $time_source maxpoll 16" | sudo tee -a "$chrony_conf_file"
+        sudo systemctl restart chronyd
+
+        if grep -q "server $time_source maxpoll 16" "$chrony_conf_file"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "System clock configured to synchronize with $time_source successfully."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure system clock synchronization. This is a finding."
+        fi
     fi
 }
 
-# Function to verify that interactive user passwords are using a strong cryptographic hash
-check_password_hashes() {
-    echo "Checking if interactive user passwords are using a strong cryptographic hash (SHA-512)." >> "$LOGFILE"
+# Function to turn off promiscuous mode on network interfaces
+turn_off_promiscuous_mode() {
+    local function_name="turn_off_promiscuous_mode"
+    local vuln_id="V-261312"
+    local rule_id="SV-261312r996406"
+    
+    local network_interfaces
+    network_interfaces=$(ip link show | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;getline}')
 
-    # Extract the password hashes from /etc/shadow
-    hashes=$(cut -d: -f2 /etc/shadow)
-    issue_found=0
-
-    for hash in $hashes; do
-        if [[ $hash != \$6\$* && $hash != "!" && $hash != "*" ]]; then
-            echo "Found a password hash that does not use SHA-512: $hash" >> "$LOGFILE"
-            issue_found=1
+    for interface in $network_interfaces; do
+        sudo ip link set dev "$interface" promisc off
+        local promisc_mode
+        promisc_mode=$(ip link show "$interface" | grep -o "PROMISC")
+        
+        if [[ -z "$promisc_mode" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Promiscuous mode turned off for $interface."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to turn off promiscuous mode for $interface. This is a finding."
         fi
     done
+}
 
-    if [ $issue_found -eq 1 ]; then
-        echo "One or more user accounts are using a weak cryptographic hash for passwords." >> "$LOGFILE"
+# Function to disable IPv4 source routing
+disable_ipv4_source_routing() {
+    local function_name="disable_ipv4_source_routing"
+    local vuln_id="V-261313"
+    local rule_id="SV-261313r996409"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.conf.all.accept_source_route=0"
+
+    sudo sysctl -w net.ipv4.conf.all.accept_source_route=0
+
+    if grep -q "^net.ipv4.conf.all.accept_source_route" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.conf.all.accept_source_route.*/'"$kernel_param"'/' "$sysctl_conf_file"
     else
-        echo "All interactive user passwords are using a strong cryptographic hash (SHA-512)." >> "$LOGFILE"
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.conf.all.accept_source_route)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 source routing has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 source routing. This is a finding."
     fi
 }
 
-# Function to verify and fix PAM configuration to use SHA512 for password hashing
-check_pam_unix_sha512() {
-    local pam_file="/etc/pam.d/common-password"
-    local pam_rule="password required pam_unix.so sha512"
+# Function to disable IPv4 default source routing
+disable_ipv4_default_source_routing() {
+    local function_name="disable_ipv4_default_source_routing"
+    local vuln_id="V-261314"
+    local rule_id="SV-261314r996412"
 
-    echo "Checking if 'pam_unix.so' is configured to use SHA512 for password hashing." >> "$LOGFILE"
-    if ! grep -q 'password.*required.*pam_unix.so.*sha512' "$pam_file"; then
-        echo "'pam_unix.so' is not configured to use SHA512 or the rule is missing." >> "$LOGFILE"
-        
-        transactional-update shell <<EOF
-if grep -q 'pam_unix.so' $pam_file; then
-    sed -i '/pam_unix.so/ s/$/ sha512/' $pam_file
-else
-    echo "$pam_rule" >> $pam_file
-fi
-exit
-EOF
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.conf.default.accept_source_route=0"
 
-        echo "Added or updated pam_unix rule to use sha512 in $pam_file." >> "$LOGFILE"
+    sudo sysctl -w net.ipv4.conf.default.accept_source_route=0
+
+    if grep -q "^net.ipv4.conf.default.accept_source_route" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.conf.default.accept_source_route.*/'"$kernel_param"'/' "$sysctl_conf_file"
     else
-        echo "'pam_unix.so' is already configured to use SHA512 for password hashing." >> "$LOGFILE"
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.conf.default.accept_source_route)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 default source routing has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 default source routing. This is a finding."
     fi
 }
 
-# Call the function
-install_packages
-expire_temporary_accounts
-initialize_aide
-configure_sshd_kex
-check_sudoers_include
-check_umask
-check_files_ownership
-check_promiscuous_mode
-check_ip_forwarding
-check_icmp_redirects
-check_source_route
-configure_ssh
-copy_and_fix_pam
+# Function to configure SLEM 5 to not accept IPv4 ICMP redirect messages
+disable_ipv4_icmp_redirects_all() {
+    local function_name="disable_ipv4_icmp_redirects_all"
+    local vuln_id="V-261315"
+    local rule_id="SV-261315r996415"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.conf.all.accept_redirects=0"
+
+    sudo sysctl -w net.ipv4.conf.all.accept_redirects=0
+
+    if grep -q "^net.ipv4.conf.all.accept_redirects" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.conf.all.accept_redirects.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.conf.all.accept_redirects)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 ICMP redirects acceptance has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 ICMP redirects acceptance. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not accept IPv4 ICMP redirect messages by default
+disable_ipv4_icmp_redirects_default() {
+    local function_name="disable_ipv4_icmp_redirects_default"
+    local vuln_id="V-261316"
+    local rule_id="SV-261316r996418"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.conf.default.accept_redirects=0"
+
+    sudo sysctl -w net.ipv4.conf.default.accept_redirects=0
+
+    if grep -q "^net.ipv4.conf.default.accept_redirects" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.conf.default.accept_redirects.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.conf.default.accept_redirects)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 ICMP redirects acceptance by default has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 ICMP redirects acceptance by default. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not allow interfaces to perform IPv4 ICMP redirects
+disable_ipv4_icmp_send_redirects_all() {
+    local function_name="disable_ipv4_icmp_send_redirects_all"
+    local vuln_id="V-261317"
+    local rule_id="SV-261317r996421"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.conf.all.send_redirects=0"
+
+    sudo sysctl -w net.ipv4.conf.all.send_redirects=0
+
+    if grep -q "^net.ipv4.conf.all.send_redirects" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.conf.all.send_redirects.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.conf.all.send_redirects)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 ICMP redirects sending has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 ICMP redirects sending. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not allow interfaces to perform IPv4 ICMP redirects by default
+disable_ipv4_icmp_send_redirects_default() {
+    local function_name="disable_ipv4_icmp_send_redirects_default"
+    local vuln_id="V-261318"
+    local rule_id="SV-261318r996424"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.conf.default.send_redirects=0"
+
+    sudo sysctl -w net.ipv4.conf.default.send_redirects=0
+
+    if grep -q "^net.ipv4.conf.default.send_redirects" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.conf.default.send_redirects.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.conf.default.send_redirects)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 ICMP redirects sending by default has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 ICMP redirects sending by default. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not perform IPv4 packet forwarding
+disable_ipv4_packet_forwarding() {
+    local function_name="disable_ipv4_packet_forwarding"
+    local vuln_id="V-261319"
+    local rule_id="SV-261319r996427"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.ip_forward=0"
+
+    sudo sysctl -w net.ipv4.ip_forward=0
+
+    if grep -q "^net.ipv4.ip_forward" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.ip_forward.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.ip_forward)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv4 packet forwarding has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv4 packet forwarding. This is a finding."
+    fi
+}
+
+# Example of calling the new function
+configure_logon_banner
+restrict_kernel_message_buffer
 disable_kdump_service
-check_and_fix_fail_delay
-check_syscall_auditing
-check_and_fix_audit_log
-check_audit_audispd_plugins
-check_aide_configuration
-check_audit_tools_permissions
-check_audit_rules_permissions
-check_disk_full_action
-check_aliases
-check_action_mail_acct
-check_su_command_audit
-check_module_audit
-check_delete_module_audit
-check_pam_timestamp_check_audit
-check_usermod_audit
-check_passmass_audit
-check_lastlog_audit
-check_tallylog_audit
-check_rm_audit
-check_chcon_audit
-check_chacl_audit
-check_setfacl_audit
-check_chmod_audit
-check_kmod_audit
-check_modprobe_audit
-check_rmmod_audit
-check_insmod_audit
-check_sudoedit_audit
-check_chmod_syscalls_audit
-check_xattr_syscalls_audit
-check_open_truncate_syscalls_audit
-configure_sudoers_audit
-check_crontab_audit
-check_chage_audit
-check_unix_chkpwd_audit
-check_passwd_audit
-check_auditd_service
-check_gshadow_audit
-check_opasswd_audit
-check_shadow_audit
-check_group_audit
-check_passwd_audit
-check_pam_cracklib
-check_pam_cracklib_special_char
-check_pam_cracklib_minlen
-configure_pam_pwhistory
-configure_password_history_file
-check_max_password_age
-check_login_defs_max_password_age
-set_min_password_age
-check_login_defs_min_password_age
-check_sha_crypt_rounds
-check_password_hashes
-check_pam_unix_sha512
+configure_aslr
+configure_kernel_address_leak_prevention
+install_slem_patches
+configure_remove_outdated_software
+install_kbd_package
+create_var_partition
+create_home_partition
+migrate_audit_data
+configure_fstab_nosuid_nfs
+configure_fstab_noexec_nfs
+configure_fstab_nosuid_removable_media
+configure_fstab_nosuid_home
+disable_automount
+protect_system_commands
+protect_library_files
+change_home_directory_permissions
+set_init_file_permissions
+set_ssh_public_key_permissions
+set_ssh_private_key_permissions
+protect_library_files_ownership
+protect_library_files_group
+protect_library_dirs_ownership
+protect_library_dirs_group
+protect_system_commands_ownership
+protect_system_commands_directory_ownership
+protect_system_commands_directory_group
+assign_valid_user_to_unowned_files
+assign_valid_group_to_ungrouped_files
+change_home_directory_group
+change_group_of_world_writable_directories
+set_sticky_bit_on_world_writable_directories
+prevent_unauthorized_access_to_error_messages
+set_log_files_permissions
+configure_firewalld_and_panic_mode
+configure_clock_synchronization
+turn_off_promiscuous_mode
+disable_ipv4_source_routing
+disable_ipv4_default_source_routing
+disable_ipv4_icmp_redirects_all
+disable_ipv4_icmp_redirects_default
+disable_ipv4_icmp_send_redirects_all
+disable_ipv4_icmp_send_redirects_default
+disable_ipv4_packet_forwarding

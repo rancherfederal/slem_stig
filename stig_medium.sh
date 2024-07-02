@@ -1091,6 +1091,472 @@ disable_ipv4_packet_forwarding() {
     fi
 }
 
+# Function to configure SLEM 5 to use IPv4 TCP syncookies
+configure_tcp_syncookies() {
+    local function_name="configure_tcp_syncookies"
+    local vuln_id="V-261320"
+    local rule_id="SV-261320r996861"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv4.tcp_syncookies=1"
+
+    sudo sysctl -w net.ipv4.tcp_syncookies=1
+
+    if grep -q "^net.ipv4.tcp_syncookies" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv4.tcp_syncookies.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv4.tcp_syncookies)
+
+    if [[ "$param_value" -eq 1 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "TCP syncookies have been enabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to enable TCP syncookies. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to disable IPv6 source routing
+disable_ipv6_source_routing_all() {
+    local function_name="disable_ipv6_source_routing_all"
+    local vuln_id="V-261321"
+    local rule_id="SV-261321r996433"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv6.conf.all.accept_source_route=0"
+
+    sudo sysctl -w net.ipv6.conf.all.accept_source_route=0
+
+    if grep -q "^net.ipv6.conf.all.accept_source_route" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv6.conf.all.accept_source_route.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv6.conf.all.accept_source_route)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv6 source routing has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv6 source routing. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to disable IPv6 default source routing
+disable_ipv6_source_routing_default() {
+    local function_name="disable_ipv6_source_routing_default"
+    local vuln_id="V-261322"
+    local rule_id="SV-261322r996436"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv6.conf.default.accept_source_route=0"
+
+    sudo sysctl -w net.ipv6.conf.default.accept_source_route=0
+
+    if grep -q "^net.ipv6.conf.default.accept_source_route" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv6.conf.default.accept_source_route.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv6.conf.default.accept_source_route)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv6 default source routing has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv6 default source routing. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not accept IPv6 ICMP redirect messages
+disable_ipv6_icmp_redirects_all() {
+    local function_name="disable_ipv6_icmp_redirects_all"
+    local vuln_id="V-261323"
+    local rule_id="SV-261323r996439"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv6.conf.all.accept_redirects=0"
+
+    sudo sysctl -w net.ipv6.conf.all.accept_redirects=0
+
+    if grep -q "^net.ipv6.conf.all.accept_redirects" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv6.conf.all.accept_redirects.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv6.conf.all.accept_redirects)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv6 ICMP redirects acceptance has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv6 ICMP redirects acceptance. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not accept IPv6 ICMP redirect messages by default
+disable_ipv6_icmp_redirects_default() {
+    local function_name="disable_ipv6_icmp_redirects_default"
+    local vuln_id="V-261324"
+    local rule_id="SV-261324r996442"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv6.conf.default.accept_redirects=0"
+
+    sudo sysctl -w net.ipv6.conf.default.accept_redirects=0
+
+    if grep -q "^net.ipv6.conf.default.accept_redirects" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv6.conf.default.accept_redirects.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv6.conf.default.accept_redirects)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv6 ICMP redirects acceptance by default has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv6 ICMP redirects acceptance by default. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not perform IPv6 packet forwarding
+disable_ipv6_packet_forwarding_all() {
+    local function_name="disable_ipv6_packet_forwarding_all"
+    local vuln_id="V-261325"
+    local rule_id="SV-261325r996445"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv6.conf.all.forwarding=0"
+
+    sudo sysctl -w net.ipv6.conf.all.forwarding=0
+
+    if grep -q "^net.ipv6.conf.all.forwarding" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv6.conf.all.forwarding.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv6.conf.all.forwarding)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv6 packet forwarding has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv6 packet forwarding. This is a finding."
+    fi
+}
+
+# Function to configure SLEM 5 to not perform IPv6 packet forwarding by default
+disable_ipv6_packet_forwarding_default() {
+    local function_name="disable_ipv6_packet_forwarding_default"
+    local vuln_id="V-261326"
+    local rule_id="SV-261326r996448"
+
+    local sysctl_conf_file="/etc/sysctl.d/99-stig.conf"
+    local kernel_param="net.ipv6.conf.default.forwarding=0"
+
+    sudo sysctl -w net.ipv6.conf.default.forwarding=0
+
+    if grep -q "^net.ipv6.conf.default.forwarding" "$sysctl_conf_file"; then
+        sudo sed -i 's/^net.ipv6.conf.default.forwarding.*/'"$kernel_param"'/' "$sysctl_conf_file"
+    else
+        echo "$kernel_param" | sudo tee -a "$sysctl_conf_file"
+    fi
+
+    sudo sysctl --system
+
+    local param_value
+    param_value=$(sysctl -n net.ipv6.conf.default.forwarding)
+
+    if [[ "$param_value" -eq 0 ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "IPv6 default packet forwarding has been disabled successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable IPv6 default packet forwarding. This is a finding."
+    fi
+}
+
+# Function to configure SSH banner
+configure_ssh_banner() {
+    local function_name="configure_ssh_banner"
+    local vuln_id="V-261329"
+    local rule_id="SV-261329r996455"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local sshd_param="Banner /etc/issue"
+
+    if grep -q "^Banner" "$sshd_config_file"; then
+        sudo sed -i 's/^Banner.*/'"$sshd_param"'/' "$sshd_config_file"
+    else
+        echo "$sshd_param" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active --quiet sshd.service; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH banner has been configured successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure SSH banner. This is a finding."
+    fi
+}
+
+# Function to configure SSH ClientAliveCountMax
+configure_ssh_client_alive_count_max() {
+    local function_name="configure_ssh_client_alive_count_max"
+    local vuln_id="V-261331"
+    local rule_id="SV-261331r996459"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local sshd_param="ClientAliveCountMax 1"
+
+    if grep -q "^ClientAliveCountMax" "$sshd_config_file"; then
+        sudo sed -i 's/^ClientAliveCountMax.*/'"$sshd_param"'/' "$sshd_config_file"
+    else
+        echo "$sshd_param" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active --quiet sshd.service; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH ClientAliveCountMax has been configured successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure SSH ClientAliveCountMax. This is a finding."
+    fi
+}
+
+# Function to configure SSH ClientAliveInterval
+configure_ssh_client_alive_interval() {
+    local function_name="configure_ssh_client_alive_interval"
+    local vuln_id="V-261332"
+    local rule_id="SV-261332r996462"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local sshd_param="ClientAliveInterval 600"
+
+    if grep -q "^ClientAliveInterval" "$sshd_config_file"; then
+        sudo sed -i 's/^ClientAliveInterval.*/'"$sshd_param"'/' "$sshd_config_file"
+    else
+        echo "$sshd_param" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active --quiet sshd.service; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH ClientAliveInterval has been configured successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure SSH ClientAliveInterval. This is a finding."
+    fi
+}
+
+# Function to add or modify the X11Forwarding directive in the SSH configuration
+disable_ssh_x11_forwarding() {
+    local function_name="disable_ssh_x11_forwarding"
+    local vuln_id="V-261333"
+    local rule_id="SV-261333r996464"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local x11_forwarding="X11Forwarding no"
+
+    if grep -q "^X11Forwarding" "$sshd_config_file"; then
+        sudo sed -i 's|^X11Forwarding.*|'"$x11_forwarding"'|' "$sshd_config_file"
+    else
+        echo "$x11_forwarding" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active sshd.service > /dev/null; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH X11Forwarding disabled and SSH service restarted successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable SSH X11Forwarding or restart SSH service. This is a finding."
+    fi
+}
+
+# Function to add or modify the PermitRootLogin directive in the SSH configuration
+deny_root_logon_ssh() {
+    local function_name="deny_root_logon_ssh"
+    local vuln_id="V-261337"
+    local rule_id="SV-261337r996844"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local permit_root_login="PermitRootLogin no"
+
+    if grep -q "^PermitRootLogin" "$sshd_config_file"; then
+        sudo sed -i 's|^PermitRootLogin.*|'"$permit_root_login"'|' "$sshd_config_file"
+    else
+        echo "$permit_root_login" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active sshd.service > /dev/null; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH PermitRootLogin set to 'no' and SSH service restarted successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set SSH PermitRootLogin to 'no' or restart SSH service. This is a finding."
+    fi
+}
+
+# Function to add or modify the LogLevel directive in the SSH configuration
+verbose_ssh_logging() {
+    local function_name="verbose_ssh_logging"
+    local vuln_id="V-261338"
+    local rule_id="SV-261338r996845"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local log_level="LogLevel VERBOSE"
+
+    if grep -q "^LogLevel" "$sshd_config_file"; then
+        sudo sed -i 's|^LogLevel.*|'"$log_level"'|' "$sshd_config_file"
+    else
+        echo "$log_level" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active sshd.service > /dev/null; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH LogLevel set to VERBOSE and SSH service restarted successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set SSH LogLevel to VERBOSE or restart SSH service. This is a finding."
+    fi
+}
+
+# Function to add or modify the PrintLastLog directive in the SSH configuration
+enable_print_last_log() {
+    local function_name="enable_print_last_log"
+    local vuln_id="V-261339"
+    local rule_id="SV-261339r996480"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local print_last_log="PrintLastLog yes"
+
+    if grep -q "^PrintLastLog" "$sshd_config_file"; then
+        sudo sed -i 's|^PrintLastLog.*|'"$print_last_log"'|' "$sshd_config_file"
+    else
+        echo "$print_last_log" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active sshd.service > /dev/null; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH PrintLastLog set to yes and SSH service restarted successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set SSH PrintLastLog to yes or restart SSH service. This is a finding."
+    fi
+}
+
+# Function to add or modify the IgnoreUserKnownHosts directive in the SSH configuration
+disable_known_hosts_authentication() {
+    local function_name="disable_known_hosts_authentication"
+    local vuln_id="V-261340"
+    local rule_id="SV-261340r996483"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local ignore_user_known_hosts="IgnoreUserKnownHosts yes"
+
+    if grep -q "^IgnoreUserKnownHosts" "$sshd_config_file"; then
+        sudo sed -i 's|^IgnoreUserKnownHosts.*|'"$ignore_user_known_hosts"'|' "$sshd_config_file"
+    else
+        echo "$ignore_user_known_hosts" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active sshd.service > /dev/null; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH IgnoreUserKnownHosts set to yes and SSH service restarted successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set SSH IgnoreUserKnownHosts to yes or restart SSH service. This is a finding."
+    fi
+}
+
+# Function to add or modify the StrictModes directive in the SSH configuration
+enable_strict_modes() {
+    local function_name="enable_strict_modes"
+    local vuln_id="V-261341"
+    local rule_id="SV-261341r996486"
+
+    local sshd_config_file="/etc/ssh/sshd_config"
+    local strict_modes="StrictModes yes"
+
+    if grep -q "^StrictModes" "$sshd_config_file"; then
+        sudo sed -i 's|^StrictModes.*|'"$strict_modes"'|' "$sshd_config_file"
+    else
+        echo "$strict_modes" | sudo tee -a "$sshd_config_file"
+    fi
+
+    sudo systemctl restart sshd.service
+
+    if systemctl is-active sshd.service > /dev/null; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SSH StrictModes set to yes and SSH service restarted successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to set SSH StrictModes to yes or restart SSH service. This is a finding."
+    fi
+}
+
+# Function to create a new private and public key pair with a passcode
+create_ssh_key_pair_with_passphrase() {
+    local function_name="create_ssh_key_pair_with_passphrase"
+    local vuln_id="V-261342"
+    local rule_id="SV-261342r996488"
+
+    local key_file="/root/.ssh/id_rsa"
+    local passphrase="<passphrase>"  # Replace with the actual passphrase
+
+    sudo ssh-keygen -N "$passphrase" -f "$key_file"
+
+    if [[ -f "${key_file}" && -f "${key_file}.pub" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "New SSH key pair created with passphrase successfully."
+    else
+        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to create SSH key pair with passphrase. This is a finding."
+    fi
+}
+
+# Function to disable all wireless network interfaces
+disable_wireless_interfaces() {
+    local function_name="disable_wireless_interfaces"
+    local vuln_id="V-261346"
+    local rule_id="SV-261346r996496"
+
+    local wireless_interfaces
+    wireless_interfaces=$(ip link show | grep wlan | awk -F: '{print $2}' | tr -d ' ')
+
+    for interface in $wireless_interfaces; do
+        sudo wicked ifdown "$interface"
+
+        if [[ $? -eq 0 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Wireless interface $interface brought down successfully."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to bring down wireless interface $interface. This is a finding."
+        fi
+
+        sudo rm "/etc/sysconfig/network/ifcfg-$interface"
+        sudo rm "/etc/wicked/ifconfig/$interface.xml"
+
+        if [[ ! -f "/etc/sysconfig/network/ifcfg-$interface" && ! -f "/etc/wicked/ifconfig/$interface.xml" ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configuration files for wireless interface $interface removed successfully."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to remove configuration files for wireless interface $interface. This is a finding."
+        fi
+    done
+}
+
 # Example of calling the new function
 configure_logon_banner
 restrict_kernel_message_buffer
@@ -1138,3 +1604,21 @@ disable_ipv4_icmp_redirects_default
 disable_ipv4_icmp_send_redirects_all
 disable_ipv4_icmp_send_redirects_default
 disable_ipv4_packet_forwarding
+configure_tcp_syncookies
+disable_ipv6_source_routing_all
+disable_ipv6_source_routing_default
+disable_ipv6_icmp_redirects_all
+disable_ipv6_icmp_redirects_default
+disable_ipv6_packet_forwarding_all
+disable_ipv6_packet_forwarding_default
+configure_ssh_banner
+configure_ssh_client_alive_count_max
+configure_ssh_client_alive_interval
+disable_ssh_x11_forwarding
+deny_root_logon_ssh
+verbose_ssh_logging
+enable_print_last_log
+disable_known_hosts_authentication
+enable_strict_modes
+create_ssh_key_pair_with_passphrase
+disable_wireless_interfaces

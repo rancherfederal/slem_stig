@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Ensure the script is run as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root. Exiting."
+    exit 1
+fi
+
 LOGFILE="stig_high.log"
 
 # Make a new logfile

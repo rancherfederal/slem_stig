@@ -430,7 +430,7 @@ protect_system_commands() {
 
     find -L /usr/local/bin /usr/local/sbin -perm /022 -type f -exec chmod 755 '{}' \;
     find -L /bin /sbin /usr/bin /usr/sbin -perm /022 -type f -exec chmod 755 '{}' \;
-    
+
     if [[ $? -eq 0 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System commands have been protected from unauthorized access."
     else
@@ -557,7 +557,7 @@ protect_library_files_ownership() {
     local rule_id="SV-261295r996362"
 
     find /lib /lib64 /usr/lib /usr/lib64 ! -user root -type f -exec chown root '{}' \;
-    
+
     if [[ $? -eq 0 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "Library files ownership set to root successfully."
     else
@@ -572,7 +572,7 @@ protect_library_files_group() {
     local rule_id="SV-261296r996365"
 
     find /lib /lib64 /usr/lib /usr/lib64 ! -group root -type f -exec chgrp root '{}' \;
-    
+
     if [[ $? -eq 0 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "Library files group set to root successfully."
     else
@@ -602,7 +602,7 @@ protect_library_dirs_group() {
     local rule_id="SV-261298r996371"
 
     find /lib /lib64 /usr/lib /usr/lib64 ! -group root -type d -exec chgrp root '{}' \;
-    
+
     if [[ $? -eq 0 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "Library directories group set to root successfully."
     else
@@ -617,7 +617,7 @@ protect_system_commands_ownership() {
     local rule_id="SV-261299r996373 & SV-261300r996375"
 
     find -L /bin /sbin /usr/bin /usr/sbin ! -user root -type f -exec chown root '{}' \;
-    
+
     if [[ $? -eq 0 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System commands ownership set to root successfully."
     else
@@ -632,7 +632,7 @@ protect_system_commands_directory_ownership() {
     local rule_id="SV-261301r996377"
 
     find -L /bin /sbin /usr/bin /usr/sbin ! -user root -type d -exec chown root '{}' \;
-    
+
     if [[ $? -eq 0 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System commands directories ownership set to root successfully."
     else
@@ -833,7 +833,7 @@ configure_clock_synchronization() {
     local function_name="configure_clock_synchronization"
     local vuln_id="V-261311"
     local rule_id="SV-261311r996404"
-    
+
     local chrony_conf_file="/etc/chrony.conf"
     local time_source="<time_source>"  # Replace with the actual authoritative DOD time source
 
@@ -856,7 +856,7 @@ turn_off_promiscuous_mode() {
     local function_name="turn_off_promiscuous_mode"
     local vuln_id="V-261312"
     local rule_id="SV-261312r996406"
-    
+
     local network_interfaces
     network_interfaces=$(ip link show | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;getline}')
 
@@ -864,7 +864,7 @@ turn_off_promiscuous_mode() {
         ip link set dev "$interface" promisc off
         local promisc_mode
         promisc_mode=$(ip link show "$interface" | grep -o "PROMISC")
-        
+
         if [[ -z "$promisc_mode" ]]; then
             log_message "$function_name" "$vuln_id" "$rule_id" "Promiscuous mode turned off for $interface."
         else
@@ -2014,7 +2014,7 @@ remove_nopasswd_from_sudoers() {
     local rule_id="SV-261373r996558"
 
     local sudoers_file="/etc/sudoers"
-    
+
     sed -i '/NOPASSWD/d' "$sudoers_file"
     sed -i '/!authenticate/d' "$sudoers_file"
 
@@ -2193,7 +2193,7 @@ enforce_min_password_length() {
     local rule_id="SV-261382r996577"
 
     local common_password_file="/etc/pam.d/common-password"
-    local minlen_option="minlen=15"
+    local minlen_option="minlen=10"
 
     if grep -q "pam_cracklib.so" "$common_password_file"; then
         sed -i '/pam_cracklib.so/ s/$/ '"$minlen_option"'/' "$common_password_file"
@@ -4078,8 +4078,8 @@ install_slem_patches
 configure_remove_outdated_software
 install_kbd_package
 create_var_partition
-create_home_partition
-migrate_audit_data
+#create_home_partition
+#migrate_audit_data
 configure_fstab_nosuid_nfs
 configure_fstab_noexec_nfs
 configure_fstab_nosuid_removable_media
@@ -4149,9 +4149,9 @@ disable_inactive_accounts
 ensure_unique_uids
 configure_pam_lastlog
 configure_autologout
-configure_pam_tally2
+#configure_pam_tally2
 configure_logon_delay
-configure_pam_tally2_directory
+#configure_pam_tally2_directory
 configure_selinux_targeted_policy
 # map_user_to_selinux_role
 configure_sudoers_defaults
@@ -4175,12 +4175,12 @@ configure_encrypt_method
 configure_min_password_age
 configure_max_password_age
 install_mfa_packages
-configure_mfa_pam
+#configure_mfa_pam
 enable_cert_status_checking
 configure_nss_cache_timeout
 configure_pam_cache_timeout
 validate_pki_certificates
-copy_pam_config_files
+#copy_pam_config_files
 install_aide
 configure_aide_acls
 configure_aide_xattrs

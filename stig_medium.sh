@@ -224,12 +224,17 @@ install_kbd_package() {
 }
 
 # Function to create a separate file system/partition for /var
+#######################################################
+#
+# set the local partition= variable to meet your setup
+#
+#######################################################
 create_var_partition() {
     local function_name="create_var_partition"
     local vuln_id="V-261279"
     local rule_id="SV-261279r996322"
 
-    local partition="/dev/sdY1"  # Replace with the actual partition
+    local partition="/dev/vda3"  # Replace with the actual partition
     local mount_point="/var"
 
     if mount | grep -q "on $mount_point"; then
@@ -258,12 +263,17 @@ create_var_partition() {
 }
 
 # Function to create a separate file system/partition for nonprivileged local interactive user home directories
+#######################################################
+#
+# set the local partition= variable to meet your setup
+#
+#######################################################
 create_home_partition() {
     local function_name="create_home_partition"
     local vuln_id="V-261278"
     local rule_id="SV-261278r996320"
 
-    local partition="/dev/sdX1"
+    local partition="/dev/vda3"
     local mount_point="/home"
 
     if mount | grep -q "on $mount_point"; then
@@ -1884,17 +1894,16 @@ configure_pam_tally2() {
 
     local common_auth_file="/etc/pam.d/common-auth"
     local common_account_file="/etc/pam.d/common-account"
+    local auth_rule="auth required pam_tally2.so onerr=fail silent audit deny=3 unlock_time=900"
+    local account_rule="account required pam_tally2.so"
 
-    sed -i '/pam_tally2.so/d' "$common_auth_file"
-    sed -i '/pam_tally2.so/d' "$common_account_file"
+    grep -q pam_tally2 "$common_auth_file" && sed -i "s|.*pam_tally2.so.*|$auth_rule|" "$common_auth_file" || echo "$auth_rule" >> "$common_auth_file"
+    grep -q pam_tally2 "$common_account_file" && sed -i "s|.*pam_tally2.so.*|$account_rule|" "$common_account_file" || echo "$account_rule" >> "$common_account_file"
 
-    echo "auth required pam_tally2.so onerr=fail silent audit deny=3" | tee -a "$common_auth_file"
-    echo "account required pam_tally2.so" | tee -a "$common_account_file"
-
-    if grep -q "pam_tally2.so" "$common_auth_file" && grep -q "pam_tally2.so" "$common_account_file"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Configured pam_tally2.so to lock accounts after three unsuccessful attempts."
+    if grep -q "^$auth_rule$" "$common_auth_file" && grep -q "^$account_rule$" "$common_account_file"; then
+        log_message "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id Configured pam_tally2 to lock accounts after three unsuccessful attempts."
     else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure pam_tally2.so. This is a finding."
+        log_message "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id Failed to configure pam_tally2 to lock accounts after three unsuccessful attempts. This is a finding."
     fi
 }
 
@@ -1905,18 +1914,18 @@ configure_logon_delay() {
     local rule_id="SV-261365r996541"
 
     local common_auth_file="/etc/pam.d/common-auth"
-    local faildelay_config="auth required pam_faildelay.so delay=5000000"
+    local delay_rule="auth required pam_faildelay.so delay=5000000"
 
-    if grep -q "^auth.*pam_faildelay.so" "$common_auth_file"; then
-        sed -i 's|^auth.*pam_faildelay.so.*|'"$faildelay_config"'|' "$common_auth_file"
+    if grep -q pam_faildelay "$common_auth_file"; then
+        sed -i "s|.*pam_faildelay.so.*|$delay_rule|" "$common_auth_file"
     else
-        echo "$faildelay_config" | tee -a "$common_auth_file"
+        echo "$delay_rule" >> "$common_auth_file"
     fi
 
-    if grep -q "^auth.*pam_faildelay.so.*delay=5000000" "$common_auth_file"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Configured delay between logon prompts successfully."
+    if grep -qF "$delay_rule" "$common_auth_file"; then
+        log_message "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id Configured logon delay of 5 seconds successfully."
     else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure delay between logon prompts. This is a finding."
+        log_message "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id Failed to configure logon delay. This is a finding."
     fi
 }
 
@@ -2029,14 +2038,15 @@ remove_nopasswd_from_sudoers() {
 #########################################################
 #
 # reauthentication with a timeout value of 5 minutes
-# Example usage: require_sudo_reauthentication 5
+# Example usage: modify timeout_value= as needed, default
+#                is 5 minutes
 #
 #########################################################
 require_sudo_reauthentication() {
     local function_name="require_sudo_reauthentication"
     local vuln_id="V-261374"
     local rule_id="SV-261374r996560"
-    local timeout_value="$1"
+    local timeout_value=5
 
     local sudoers_file="/etc/sudoers"
     local timeout_config="Defaults timestamp_timeout=$timeout_value"
@@ -2193,7 +2203,7 @@ enforce_min_password_length() {
     local rule_id="SV-261382r996577"
 
     local common_password_file="/etc/pam.d/common-password"
-    local minlen_option="minlen=10"
+    local minlen_option="minlen=15"
 
     if grep -q "pam_cracklib.so" "$common_password_file"; then
         sed -i '/pam_cracklib.so/ s/$/ '"$minlen_option"'/' "$common_password_file"
@@ -2251,10 +2261,17 @@ store_encrypted_passwords() {
     local common_password_file="/etc/pam.d/common-password"
     local unix_option="sha512"
 
-    if grep -q "pam_unix.so" "$common_password_file"; then
+    # Combined check for SHA-512 in /etc/shadow and /etc/login.defs
+    if ! sudo grep -q ':\$6\$' /etc/shadow || ! grep -q "ENCRYPT_METHOD SHA512" /etc/login.defs; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "SHA-512 configuration not found in /etc/shadow or /etc/login.defs. This is a finding."
+        return 1
+    fi
+
+    # Configure /etc/pam.d/common-password to use SHA-512
+    if grep -q pam_unix "$common_password_file"; then
         sed -i '/pam_unix.so/ s/$/ '"$unix_option"'/' "$common_password_file"
         sed -i '/pam_unix.so/ s/nullok//' "$common_password_file"
-        log_message "$function_name" "$vuln_id" "$rule_id" "Configured to store only encrypted representations of passwords with SHA512."
+        log_message "$function_name" "$vuln_id" "$rule_id" "Configured to store only encrypted representations of passwords with SHA-512."
     else
         log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure encrypted password storage. This is a finding."
     fi
@@ -2423,7 +2440,7 @@ configure_mfa_pam() {
     local common_auth_file="/etc/pam.d/common-auth"
     local mfa_line="auth sufficient pam_pkcs11.so"
 
-    if grep -q "pam_pkcs11.so" "$common_auth_file"; then
+    if grep -q pam_pkcs11 "$common_auth_file"; then
         sed -i 's|^auth.*pam_pkcs11.so.*|'"$mfa_line"'|' "$common_auth_file"
     else
         echo "$mfa_line" | tee -a "$common_auth_file"
@@ -2526,12 +2543,14 @@ copy_pam_config_files() {
     local vuln_id="V-261402"
     local rule_id="SV-261402r996624"
 
-    sh -c 'for X in /etc/pam.d/common-*-pc; do cp -ivp --remove-destination $X ${X:0:-3}; done'
+    for X in /etc/pam.d/common-*-pc; do
+        cp -ivp --remove-destination "$X" "${X:0:-3}"
+    done
 
     if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Copied PAM configuration files to their static locations and removed soft links successfully."
+        log_message "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id Copied PAM configuration files to their static locations and removed soft links successfully."
     else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to copy PAM configuration files and remove soft links. This is a finding."
+        log_message "$function_name: Vuln_ID: $vuln_id Rule_ID: $rule_id Failed to copy PAM configuration files and remove soft links. This is a finding."
     fi
 }
 
@@ -4069,6 +4088,7 @@ remove_task_never_rule() {
 }
 
 # Example of calling the new function
+# Commented function calls, see the function!
 configure_logon_banner
 restrict_kernel_message_buffer
 disable_kdump_service
@@ -4078,8 +4098,8 @@ install_slem_patches
 configure_remove_outdated_software
 install_kbd_package
 create_var_partition
-#create_home_partition
-#migrate_audit_data
+# create_home_partition 
+# migrate_audit_data
 configure_fstab_nosuid_nfs
 configure_fstab_noexec_nfs
 configure_fstab_nosuid_removable_media
@@ -4149,14 +4169,14 @@ disable_inactive_accounts
 ensure_unique_uids
 configure_pam_lastlog
 configure_autologout
-#configure_pam_tally2
+configure_pam_tally2
 configure_logon_delay
-#configure_pam_tally2_directory
+configure_pam_tally2_directory
 configure_selinux_targeted_policy
-# map_user_to_selinux_role
+# map_user_to_selinux_role "username" "sysadm_u"
 configure_sudoers_defaults
 remove_nopasswd_from_sudoers
-# require_sudo_reauthentication
+require_sudo_reauthentication
 remove_specific_sudoers_entries
 configure_sudoers_include
 enforce_password_complexity_uppercase
@@ -4168,19 +4188,19 @@ enforce_min_password_length
 enforce_password_change_difok
 enforce_password_history
 store_encrypted_passwords
-# enforce_min_password_age
-# enforce_max_password_age
+# enforce_min_password_age "username"
+# enforce_max_password_age "username"
 create_password_history_file
 configure_encrypt_method
 configure_min_password_age
 configure_max_password_age
 install_mfa_packages
-#configure_mfa_pam
+configure_mfa_pam
 enable_cert_status_checking
 configure_nss_cache_timeout
 configure_pam_cache_timeout
 validate_pki_certificates
-#copy_pam_config_files
+copy_pam_config_files
 install_aide
 configure_aide_acls
 configure_aide_xattrs

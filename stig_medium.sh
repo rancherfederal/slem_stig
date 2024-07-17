@@ -223,111 +223,6 @@ install_kbd_package() {
     fi
 }
 
-# Function to create a separate file system/partition for /var
-#######################################################
-#
-# set the local partition= variable to meet your setup
-#
-#######################################################
-create_var_partition() {
-    local function_name="create_var_partition"
-    local vuln_id="V-261279"
-    local rule_id="SV-261279r996322"
-
-    local partition="/dev/vda3"  # Replace with the actual partition
-    local mount_point="/var"
-
-    if mount | grep -q "on $mount_point"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "/var is already on a separate partition."
-        return
-    fi
-
-    mkfs.ext4 "$partition"
-    mount "$partition" /mnt
-
-    rsync -av /var/ /mnt/
-    mv /var /var.old
-    mkdir /var
-    umount /mnt
-    mount "$partition" "$mount_point"
-
-    echo "$partition $mount_point ext4 defaults 0 2" | tee -a /etc/fstab
-
-    if mount | grep -q "on $mount_point"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "/var has been moved to a separate partition."
-        rm -rf /var.old
-    else
-        mv /var.old /var
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to move /var to a separate partition. This is a finding."
-    fi
-}
-
-# Function to create a separate file system/partition for nonprivileged local interactive user home directories
-#######################################################
-#
-# set the local partition= variable to meet your setup
-#
-#######################################################
-create_home_partition() {
-    local function_name="create_home_partition"
-    local vuln_id="V-261278"
-    local rule_id="SV-261278r996320"
-
-    local partition="/dev/vda3"
-    local mount_point="/home"
-
-    if mount | grep -q "on $mount_point"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "/home is already on a separate partition."
-        return
-    fi
-
-    mkfs.ext4 "$partition"
-    mkdir -p "$mount_point"
-    mount "$partition" "$mount_point"
-
-    echo "$partition $mount_point ext4 defaults 0 2" | tee -a /etc/fstab
-
-    if mount | grep -q "on $mount_point"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Nonprivileged local interactive user home directories have been moved to a separate partition."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to move nonprivileged local interactive user home directories to a separate partition. This is a finding."
-    fi
-}
-
-# Function to migrate SLEM 5 audit data path onto a separate file system or partition
-migrate_audit_data() {
-    local function_name="migrate_audit_data"
-    local vuln_id="V-261280"
-    local rule_id="SV-261280r996324"
-
-    local partition="/dev/sdZ1"  # Replace with the actual partition
-    local mount_point="/var/log/audit"
-
-    if mount | grep -q "on $mount_point"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Audit data path is already on a separate partition."
-        return
-    fi
-
-    mkfs.ext4 "$partition"
-    mount "$partition" /mnt
-
-    rsync -av /var/log/audit/ /mnt/
-    mv /var/log/audit /var/log/audit.old
-    mkdir /var/log/audit
-    umount /mnt
-    mount "$partition" "$mount_point"
-
-    echo "$partition $mount_point ext4 defaults 0 2" | tee -a /etc/fstab
-
-    if mount | grep -q "on $mount_point"; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Audit data path has been moved to a separate partition."
-        rm -rf /var/log/audit.old
-    else
-        mv /var/log/audit.old /var/log/audit
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to move audit data path to a separate partition. This is a finding."
-    fi
-}
-
 # Function to configure /etc/fstab to use the nosuid option for NFS file systems
 configure_fstab_nosuid_nfs() {
     local function_name="configure_fstab_nosuid_nfs"
@@ -1977,28 +1872,6 @@ configure_selinux_targeted_policy() {
     fi
 }
 
-# Function to map users to specific SELinux roles
-###############################################################
-#
-# Example usage: map_user_to_selinux_role "username" "sysadm_u"
-#
-###############################################################
-map_user_to_selinux_role() {
-    local function_name="map_user_to_selinux_role"
-    local vuln_id="V-261371"
-    local rule_id="SV-261371r996554"
-    local username="$1"
-    local role="$2"
-
-    semanage login -m -s "$role" "$username"
-
-    if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Mapped user $username to SELinux role $role successfully."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to map user $username to SELinux role $role. This is a finding."
-    fi
-}
-
 # Function to define defaults in the sudoers file
 configure_sudoers_defaults() {
     local function_name="configure_sudoers_defaults"
@@ -2280,49 +2153,69 @@ store_encrypted_passwords() {
 # Function to enforce a minimum password age of one day
 #######################################################
 #
-# example of usage: enforce_min_password_age "username"
+# This will update all users except for root, and
+# future users added.
 #
 #######################################################
 enforce_min_password_age() {
     local function_name="enforce_min_password_age"
     local vuln_id="V-261388"
     local rule_id="SV-261388r996591"
-    local username="$1"
 
-    passwd -n 1 "$username"
+    for username in $(getent passwd | awk -F: '$3 >= 1000 {print $1}' | grep -v '^root$'); do
+        passwd -n 1 "$username"
 
-    local min_age
-    min_age=$(chage -l "$username" | grep "Minimum" | awk '{print $4}')
+        local min_age
+        min_age=$(chage -l "$username" | grep "Minimum" | awk '{print $4}')
 
-    if [[ "$min_age" -eq 1 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Configured minimum password age of one day for user $username."
+        if [[ "$min_age" -eq 1 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configured minimum password age of one day for user $username."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure minimum password age for user $username. This is a finding."
+        fi
+    done
+
+    if ! grep -q "^PASS_MIN_DAYS" /etc/login.defs; then
+        echo 'PASS_MIN_DAYS 1' >> /etc/login.defs
     else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure minimum password age for user $username. This is a finding."
+        sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS 1/' /etc/login.defs
     fi
+
+    log_message "$function_name" "$vuln_id" "$rule_id" "Ensured minimum password age policy for future users."
 }
 
 # Function to enforce a maximum password age of 60 days
 #######################################################
 #
-# example of usage: enforce_max_password_age "username"
+# This will update all users except for root, and
+# future users added.
 #
 #######################################################
 enforce_max_password_age() {
     local function_name="enforce_max_password_age"
     local vuln_id="V-261389"
     local rule_id="SV-261389r996593"
-    local username="$1"
 
-    passwd -x 60 "$username"
+    for username in $(getent passwd | awk -F: '$3 >= 1000 {print $1}' | grep -v '^root$'); do
+        passwd -x 60 "$username"
 
-    local max_age
-    max_age=$(chage -l "$username" | grep "Maximum" | awk '{print $4}')
+        local max_age
+        max_age=$(chage -l "$username" | grep "Maximum" | awk '{print $4}')
 
-    if [[ "$max_age" -eq 60 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Configured maximum password age of 60 days for user $username."
+        if [[ "$max_age" -eq 60 ]]; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Configured maximum password age of 60 days for user $username."
+        else
+            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure maximum password age for user $username. This is a finding."
+        fi
+    done
+
+    if ! grep -q "^PASS_MAX_DAYS" /etc/login.defs; then
+        echo 'PASS_MAX_DAYS 60' >> /etc/login.defs
     else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure maximum password age for user $username. This is a finding."
+        sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS 60/' /etc/login.defs
     fi
+
+    log_message "$function_name" "$vuln_id" "$rule_id" "Ensured maximum password age policy for future users."
 }
 
 # Function to create the password history file
@@ -4088,7 +3981,6 @@ remove_task_never_rule() {
 }
 
 # Example of calling the new function
-# Commented function calls, see the function!
 configure_logon_banner
 restrict_kernel_message_buffer
 disable_kdump_service
@@ -4097,9 +3989,6 @@ configure_kernel_address_leak_prevention
 install_slem_patches
 configure_remove_outdated_software
 install_kbd_package
-create_var_partition
-# create_home_partition 
-# migrate_audit_data
 configure_fstab_nosuid_nfs
 configure_fstab_noexec_nfs
 configure_fstab_nosuid_removable_media
@@ -4173,7 +4062,6 @@ configure_pam_tally2
 configure_logon_delay
 configure_pam_tally2_directory
 configure_selinux_targeted_policy
-# map_user_to_selinux_role "username" "sysadm_u"
 configure_sudoers_defaults
 remove_nopasswd_from_sudoers
 require_sudo_reauthentication
@@ -4188,8 +4076,8 @@ enforce_min_password_length
 enforce_password_change_difok
 enforce_password_history
 store_encrypted_passwords
-# enforce_min_password_age "username"
-# enforce_max_password_age "username"
+enforce_min_password_age
+enforce_max_password_age
 create_password_history_file
 configure_encrypt_method
 configure_min_password_age

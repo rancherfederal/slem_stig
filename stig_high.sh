@@ -47,27 +47,22 @@ disable_ctrl_alt_del() {
     local vuln_id="V-261266"
     local rule_id="SV-261266r996292"
 
-    local disable_status
-    local mask_status
-    disable_status=$(systemctl is-enabled ctrl-alt-del.target)
-    mask_status=$(systemctl is-enabled ctrl-alt-del.target)
+    local ctrl_alt_del_active_status
 
-    if [[ "$disable_status" == "disabled" && "$mask_status" == "masked" ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Ctrl-Alt-Delete sequence is already disabled and masked."
+    ctrl_alt_del_active_status=$(systemctl is-active ctrl-alt-del.target 2>/dev/null)
+
+    if [[ "$ctrl_alt_del_active_status" == "active" ]]; then
+        systemctl disable ctrl-alt-del.target
+        systemctl mask ctrl-alt-del.target
+        log_message "$function_name" "$vuln_id" "$rule_id" "Ctrl-Alt-Delete sequence has been disabled and masked."
+    elif [[ "$ctrl_alt_del_active_status" == "inactive" ]]; then
+        systemctl mask ctrl-alt-del.target
+        log_message "$function_name" "$vuln_id" "$rule_id" "Ctrl-Alt-Delete sequence has been masked."
     else
-        sudo systemctl disable ctrl-alt-del.target
-        sudo systemctl mask ctrl-alt-del.target
-        sudo systemctl daemon-reload
-
-        disable_status=$(systemctl is-enabled ctrl-alt-del.target)
-        mask_status=$(systemctl is-enabled ctrl-alt-del.target)
-
-        if [[ "$disable_status" == "disabled" && "$mask_status" == "masked" ]]; then
-            log_message "$function_name" "$vuln_id" "$rule_id" "Ctrl-Alt-Delete sequence has been disabled and masked successfully."
-        else
-            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable and mask the Ctrl-Alt-Delete sequence. This is a finding."
-        fi
+        log_message "$function_name" "$vuln_id" "$rule_id" "Ctrl-Alt-Delete sequence is in an unknown state. This is a finding."
     fi
+
+    systemctl daemon-reload
 }
 
 # Function to check if SLEM 5 has set an encrypted root password in grub.cfg
@@ -82,7 +77,7 @@ check_encrypted_root_password() {
     fi
 
     local grub_password_entry
-    grub_password_entry=$(sudo cat /boot/grub2/grub.cfg | grep -i password)
+    grub_password_entry=$(cat /boot/grub2/grub.cfg | grep -i password)
 
     if [[ "$grub_password_entry" == password_pbkdf2* ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "Encrypted root password is correctly set in grub.cfg."
@@ -109,16 +104,16 @@ configure_boot_password_encryption() {
         return
     fi
 
-    sudo sed -i '/^set superusers=/d' /etc/grub.d/40_custom
-    sudo sed -i '/^password_pbkdf2/d' /etc/grub.d/40_custom
-    echo "set superusers=\"root\"" | sudo tee -a /etc/grub.d/40_custom
-    echo "password_pbkdf2 root $grub_password_hash" | sudo tee -a /etc/grub.d/40_custom
+    sed -i '/^set superusers=/d' /etc/grub.d/40_custom
+    sed -i '/^password_pbkdf2/d' /etc/grub.d/40_custom
+    echo "set superusers=\"root\"" | tee -a /etc/grub.d/40_custom
+    echo "password_pbkdf2 root $grub_password_hash" | tee -a /etc/grub.d/40_custom
 
-    sudo grub2-mkconfig --output=/tmp/grub2.cfg
-    sudo mv /tmp/grub2.cfg /boot/efi/EFI/BOOT/grub.cfg
+    grub2-mkconfig --output=/tmp/grub2.cfg
+    mv /tmp/grub2.cfg /boot/efi/EFI/BOOT/grub.cfg
 
     local grub_config
-    grub_config=$(sudo cat /boot/efi/EFI/BOOT/grub.cfg | grep -i password_pbkdf2)
+    grub_config=$(cat /boot/efi/EFI/BOOT/grub.cfg | grep -i password_pbkdf2)
 
     if [[ "$grub_config" == *password_pbkdf2* ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "Boot password encryption configured successfully."
@@ -140,9 +135,9 @@ configure_zypper_gpgcheck() {
         log_message "$function_name" "$vuln_id" "$rule_id" "gpgcheck is already enabled in zypp.conf."
     else
         if grep -q "^gpgcheck" "$zypp_conf_file"; then
-            sudo sed -i 's/^gpgcheck.*/gpgcheck = on/' "$zypp_conf_file"
+            sed -i 's/^gpgcheck.*/gpgcheck = on/' "$zypp_conf_file"
         else
-            echo "$gpgcheck_setting" | sudo tee -a "$zypp_conf_file"
+            echo "$gpgcheck_setting" | tee -a "$zypp_conf_file"
         fi
 
         if grep -q "^gpgcheck = on" "$zypp_conf_file"; then
@@ -159,9 +154,9 @@ verify_telnet_server_not_installed() {
     local vuln_id="V-261277"
     local rule_id="SV-261277r996318"
 
-    if sudo zypper se telnet-server | grep -q "Installed"; then
-        sudo zypper remove -y telnet-server
-        if sudo zypper se telnet-server | grep -q "Installed"; then
+    if zypper se telnet-server | grep -q "Installed"; then
+        zypper remove -y telnet-server
+        if zypper se telnet-server | grep -q "Installed"; then
             log_message "$function_name" "$vuln_id" "$rule_id" "telnet-server package is installed and could not be removed. This is a finding."
         else
             log_message "$function_name" "$vuln_id" "$rule_id" "telnet-server package was installed but has been removed successfully."
@@ -178,7 +173,7 @@ verify_disk_encryption_and_fips_mode() {
     local rule_id="SV-261284r996333"
 
     local unencrypted_partitions
-    unencrypted_partitions=$(sudo blkid | grep -v -e "crypto_LUKS" -e "/boot" -e "tmpfs" -e "/proc" -e "/sys")
+    unencrypted_partitions=$(blkid | grep -v -e "crypto_LUKS" -e "/boot" -e "tmpfs" -e "/proc" -e "/sys")
     if [[ -n "$unencrypted_partitions" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "Unencrypted partitions found: $unencrypted_partitions. This is a finding."
     else
@@ -189,7 +184,7 @@ verify_disk_encryption_and_fips_mode() {
         log_message "$function_name" "$vuln_id" "$rule_id" "/etc/crypttab file does not exist. This is a finding."
     else
         local missing_crypttab_entries
-        for uuid in $(sudo blkid | grep "crypto_LUKS" | awk -F\" '{print $2}'); do
+        for uuid in $(blkid | grep "crypto_LUKS" | awk -F\" '{print $2}'); do
             if ! grep -q "$uuid" /etc/crypttab; then
                 missing_crypttab_entries+="$uuid "
             fi
@@ -203,7 +198,7 @@ verify_disk_encryption_and_fips_mode() {
     fi
 
     local fips_enabled
-    fips_enabled=$(sudo sysctl -a | grep -w "crypto.fips_enabled" | awk '{print $3}')
+    fips_enabled=$(sysctl -a | grep -w "crypto.fips_enabled" | awk '{print $3}')
 
     if [[ "$fips_enabled" -eq 1 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System is running in FIPS mode."
@@ -219,12 +214,12 @@ verify_ssh_package_installed() {
     local rule_id="SV-261327r996450"
 
     local openssh_installed
-    openssh_installed=$(zypper info openssh | grep -i "Installed" | awk '{print $3}')
+    openssh_installed=$(zypper info openssh | awk -F ': ' '/Installed/ && !/Size/ {print $2}')
 
     if [[ "$openssh_installed" == "Yes" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "openssh package is installed."
     else
-        sudo zypper install -y openssh
+        zypper install -y openssh
         openssh_installed=$(zypper info openssh | grep -i "Installed" | awk '{print $3}')
         if [[ "$openssh_installed" == "Yes" ]]; then
             log_message "$function_name" "$vuln_id" "$rule_id" "openssh package was not installed but has been installed successfully."
@@ -241,27 +236,33 @@ enable_and_start_openssh_service() {
     local rule_id="SV-261328r996453"
 
     local sshd_enabled
-    sshd_enabled=$(systemctl is-enabled sshd.service)
-    if [[ "$sshd_enabled" == "enabled" ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "sshd.service is already enabled."
-    else
-        sudo systemctl enable sshd.service
-        sshd_enabled=$(systemctl is-enabled sshd.service)
-        
-        if [[ "$sshd_enabled" == "enabled" ]]; then
-            log_message "$function_name" "$vuln_id" "$rule_id" "sshd.service has been enabled successfully."
-        else
-            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to enable sshd.service. This is a finding."
-        fi
-    fi
-
-    sudo systemctl restart sshd.service
     local sshd_active
-    sshd_active=$(systemctl is-active sshd.service)
-    if [[ "$sshd_active" == "active" ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "sshd.service is running."
+
+    sshd_enabled=$(systemctl is-enabled sshd.service 2>/dev/null)
+    sshd_active=$(systemctl is-active sshd.service 2>/dev/null)
+
+    if [[ "$sshd_enabled" == "enabled" && "$sshd_active" == "active" ]]; then
+        log_message "$function_name" "$vuln_id" "$rule_id" "sshd.service is already enabled and running."
     else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to start sshd.service. This is a finding."
+        if [[ "$sshd_enabled" != "enabled" ]]; then
+            systemctl enable sshd.service
+            sshd_enabled=$(systemctl is-enabled sshd.service 2>/dev/null)
+            if [[ "$sshd_enabled" == "enabled" ]]; then
+                log_message "$function_name" "$vuln_id" "$rule_id" "sshd.service has been enabled successfully."
+            else
+                log_message "$function_name" "$vuln_id" "$rule_id" "Failed to enable sshd.service. This is a finding."
+            fi
+        fi
+
+        if [[ "$sshd_active" != "active" ]]; then
+            systemctl start sshd.service
+            sshd_active=$(systemctl is-active sshd.service 2>/dev/null)
+            if [[ "$sshd_active" == "active" ]]; then
+                log_message "$function_name" "$vuln_id" "$rule_id" "sshd.service is running."
+            else
+                log_message "$function_name" "$vuln_id" "$rule_id" "Failed to start sshd.service. This is a finding."
+            fi
+        fi
     fi
 }
 
@@ -276,18 +277,18 @@ configure_ssh_no_unattended_logon() {
     local permit_user_environment="PermitUserEnvironment no"
     
     if grep -q "^PermitEmptyPasswords" "$sshd_config_file"; then
-        sudo sed -i 's/^PermitEmptyPasswords.*/PermitEmptyPasswords no/' "$sshd_config_file"
+        sed -i 's/^PermitEmptyPasswords.*/PermitEmptyPasswords no/' "$sshd_config_file"
     else
-        echo "$permit_empty_passwords" | sudo tee -a "$sshd_config_file"
+        echo "$permit_empty_passwords" | tee -a "$sshd_config_file"
     fi
 
     if grep -q "^PermitUserEnvironment" "$sshd_config_file"; then
-        sudo sed -i 's/^PermitUserEnvironment.*/PermitUserEnvironment no/' "$sshd_config_file"
+        sed -i 's/^PermitUserEnvironment.*/PermitUserEnvironment no/' "$sshd_config_file"
     else
-        echo "$permit_user_environment" | sudo tee -a "$sshd_config_file"
+        echo "$permit_user_environment" | tee -a "$sshd_config_file"
     fi
 
-    sudo systemctl restart sshd.service
+    systemctl restart sshd.service
     
     local permit_empty_passwords_applied
     local permit_user_environment_applied
@@ -310,12 +311,12 @@ configure_ssh_fips_approved_ciphers() {
     local fips_ciphers="Ciphers aes256-ctr,aes192-ctr,aes128-ctr"
     
     if grep -q "^Ciphers" "$sshd_config_file"; then
-        sudo sed -i 's/^Ciphers.*/'"$fips_ciphers"'/' "$sshd_config_file"
+        sed -i 's/^Ciphers.*/'"$fips_ciphers"'/' "$sshd_config_file"
     else
-        echo "$fips_ciphers" | sudo tee -a "$sshd_config_file"
+        echo "$fips_ciphers" | tee -a "$sshd_config_file"
     fi
 
-    sudo systemctl restart sshd.service
+    systemctl restart sshd.service
     
     local ciphers_applied
     ciphers_applied=$(grep "^Ciphers" "$sshd_config_file")
@@ -337,12 +338,12 @@ configure_ssh_fips_approved_macs() {
     local fips_macs="MACs hmac-sha2-512,hmac-sha2-256"
     
     if grep -q "^MACs" "$sshd_config_file"; then
-        sudo sed -i 's/^MACs.*/'"$fips_macs"'/' "$sshd_config_file"
+        sed -i 's/^MACs.*/'"$fips_macs"'/' "$sshd_config_file"
     else
-        echo "$fips_macs" | sudo tee -a "$sshd_config_file"
+        echo "$fips_macs" | tee -a "$sshd_config_file"
     fi
 
-    sudo systemctl restart sshd.service
+    systemctl restart sshd.service
     
     local macs_applied
     macs_applied=$(grep "^MACs" "$sshd_config_file")
@@ -364,12 +365,12 @@ configure_ssh_fips_approved_kex_algorithms() {
     local fips_kex_algorithms="KexAlgorithms ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256"
     
     if grep -q "^KexAlgorithms" "$sshd_config_file"; then
-        sudo sed -i 's/^KexAlgorithms.*/'"$fips_kex_algorithms"'/' "$sshd_config_file"
+        sed -i 's/^KexAlgorithms.*/'"$fips_kex_algorithms"'/' "$sshd_config_file"
     else
-        echo "$fips_kex_algorithms" | sudo tee -a "$sshd_config_file"
+        echo "$fips_kex_algorithms" | tee -a "$sshd_config_file"
     fi
 
-    sudo systemctl restart sshd.service
+    systemctl restart sshd.service
     
     local kex_algorithms_applied
     kex_algorithms_applied=$(grep "^KexAlgorithms" "$sshd_config_file")
@@ -392,7 +393,7 @@ remove_shosts_files() {
 
     if [[ -n "$shosts_files" ]]; then
         for file in $shosts_files; do
-            sudo rm -f "$file"
+            rm -f "$file"
         done
 
         local remaining_shosts_files
@@ -419,7 +420,7 @@ remove_shosts_equiv_files() {
 
     if [[ -n "$shosts_equiv_files" ]]; then
         for file in $shosts_equiv_files; do
-            sudo rm -f "$file"
+            rm -f "$file"
         done
 
         local remaining_shosts_equiv_files
@@ -451,15 +452,15 @@ configure_gui_no_unattended_logon() {
     fi
 
     if grep -q "^DISPLAYMANAGER_AUTOLOGIN" "$displaymanager_config_file"; then
-        sudo sed -i 's/^DISPLAYMANAGER_AUTOLOGIN.*/'"$autologin_setting"'/' "$displaymanager_config_file"
+        sed -i 's/^DISPLAYMANAGER_AUTOLOGIN.*/'"$autologin_setting"'/' "$displaymanager_config_file"
     else
-        echo "$autologin_setting" | sudo tee -a "$displaymanager_config_file"
+        echo "$autologin_setting" | tee -a "$displaymanager_config_file"
     fi
 
     if grep -q "^DISPLAYMANAGER_PASSWORD_LESS_LOGIN" "$displaymanager_config_file"; then
-        sudo sed -i 's/^DISPLAYMANAGER_PASSWORD_LESS_LOGIN.*/'"$password_less_login_setting"'/' "$displaymanager_config_file"
+        sed -i 's/^DISPLAYMANAGER_PASSWORD_LESS_LOGIN.*/'"$password_less_login_setting"'/' "$displaymanager_config_file"
     else
-        echo "$password_less_login_setting" | sudo tee -a "$displaymanager_config_file"
+        echo "$password_less_login_setting" | tee -a "$displaymanager_config_file"
     fi
 
     local autologin_applied
@@ -495,7 +496,7 @@ change_non_root_uid_zero() {
                 new_uid=$(awk -F: '($3 >= 1000) {if ($3 > max) max=$3} END {print max+1}' /etc/passwd)
             fi
 
-            sudo usermod -u "$new_uid" "$account"
+            usermod -u "$new_uid" "$account"
             if [[ $? -eq 0 ]]; then
                 log_message "$function_name" "$vuln_id" "$rule_id" "Changed UID of account '$account' from $current_uid to $new_uid."
             else
@@ -517,7 +518,7 @@ configure_no_blank_passwords() {
 
     for pam_file in "${pam_files[@]}"; do
         if grep -q "nullok" "$pam_file"; then
-            sudo sed -i 's/nullok//g' "$pam_file"
+            sed -i 's/nullok//g' "$pam_file"
 
             if grep -q "nullok" "$pam_file"; then
                 log_message "$function_name" "$vuln_id" "$rule_id" "Failed to remove 'nullok' from $pam_file. This is a finding."
@@ -542,7 +543,7 @@ ensure_accounts_have_password_or_locked() {
     if [[ -n "$no_password_accounts" ]]; then
         for account in $no_password_accounts; do
             if [[ "$account" != "root" && "$account" != "" ]]; then
-                sudo passwd -l "$account"
+                passwd -l "$account"
 
                 if [[ $? -eq 0 ]]; then
                     log_message "$function_name" "$vuln_id" "$rule_id" "Account '$account' has been locked successfully."
@@ -566,9 +567,9 @@ configure_password_encryption_sha512() {
     local encrypt_method="ENCRYPT_METHOD SHA512"
 
     if grep -q "^ENCRYPT_METHOD" "$login_defs_file"; then
-        sudo sed -i 's/^ENCRYPT_METHOD.*/'"$encrypt_method"'/' "$login_defs_file"
+        sed -i 's/^ENCRYPT_METHOD.*/'"$encrypt_method"'/' "$login_defs_file"
     else
-        echo "$encrypt_method" | sudo tee -a "$login_defs_file"
+        echo "$encrypt_method" | tee -a "$login_defs_file"
     fi
 
     local encrypt_method_applied
@@ -586,7 +587,7 @@ configure_password_encryption_sha512() {
     if [[ -n "$non_sha512_accounts" ]]; then
         for account in $non_sha512_accounts; do
             if [[ "$account" != "root" && "$account" != "" ]]; then
-                sudo passwd -l "$account"
+                passwd -l "$account"
 
                 if [[ $? -eq 0 ]]; then
                     log_message "$function_name" "$vuln_id" "$rule_id" "Account '$account' using non-SHA512 hashing has been locked successfully."
@@ -610,9 +611,9 @@ configure_password_hashing_rounds() {
     local min_rounds="SHA_CRYPT_MIN_ROUNDS 5000"
 
     if grep -q "^SHA_CRYPT_MIN_ROUNDS" "$login_defs_file"; then
-        sudo sed -i 's/^SHA_CRYPT_MIN_ROUNDS.*/'"$min_rounds"'/' "$login_defs_file"
+        sed -i 's/^SHA_CRYPT_MIN_ROUNDS.*/'"$min_rounds"'/' "$login_defs_file"
     else
-        echo "$min_rounds" | sudo tee -a "$login_defs_file"
+        echo "$min_rounds" | tee -a "$login_defs_file"
     fi
 
     local rounds_applied
@@ -635,7 +636,7 @@ configure_fips_mode() {
     local kernel_params="fips=1"
     
     local fips_enabled
-    fips_enabled=$(sudo sysctl -a | grep -w "crypto.fips_enabled" | awk '{print $3}')
+    fips_enabled=$(sysctl -a | grep -w "crypto.fips_enabled" | awk '{print $3}')
 
     if [[ "$fips_enabled" -eq 1 ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System is already running in FIPS mode."
@@ -645,8 +646,8 @@ configure_fips_mode() {
     if grep -q "fips=1" "$grub_cfg_file"; then
         log_message "$function_name" "$vuln_id" "$rule_id" "fips=1 is already added to the kernel parameters."
     else
-        sudo sed -i 's/GRUB_CMDLINE_LINUX="/&fips=1 /' "$grub_cfg_file"
-        sudo grub2-mkconfig -o /boot/grub2/grub.cfg
+        sed -i 's/GRUB_CMDLINE_LINUX="/&fips=1 /' "$grub_cfg_file"
+        grub2-mkconfig -o /boot/grub2/grub.cfg
 
         if grep -q "fips=1" /boot/grub2/grub.cfg; then
             log_message "$function_name" "$vuln_id" "$rule_id" "fips=1 added to kernel parameters successfully. Reboot the system to apply changes."

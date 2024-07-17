@@ -14,7 +14,7 @@ stig_medium_user_input.sh: this script takes the data from DISA STIG SLE Micro 5
 
 stig_low.sh: this script takes the data from DISA STIG SLE Micro 5 v1r1 for any "low vulnerabilities" and applies the recommended fixes.
 
-## Findings
+# Findings
 
 This section shows current findings that are still left to work on.
 

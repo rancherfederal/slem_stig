@@ -168,21 +168,6 @@ configure_kernel_address_leak_prevention() {
     fi
 }
 
-# Function to install applicable SLEM 5 patches and reboot
-install_slem_patches() {
-    local function_name="install_slem_patches"
-    local vuln_id="V-261273"
-    local rule_id="SV-261273r996311"
-
-    zypper patch
-
-    if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "SLEM 5 patches have been installed successfully."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install SLEM 5 patches. This is a finding."
-    fi
-}
-
 # Function to configure SLEM 5 to remove outdated software components after an update
 configure_remove_outdated_software() {
     local function_name="configure_remove_outdated_software"
@@ -205,21 +190,6 @@ configure_remove_outdated_software() {
         log_message "$function_name" "$vuln_id" "$rule_id" "Configured to remove outdated software components after an update in $zypp_conf_file."
     else
         log_message "$function_name" "$vuln_id" "$rule_id" "Failed to configure removal of outdated software components in $zypp_conf_file. This is a finding."
-    fi
-}
-
-# Function to install the kbd package to allow users to lock the console
-install_kbd_package() {
-    local function_name="install_kbd_package"
-    local vuln_id="V-261276"
-    local rule_id="SV-261276r996316"
-
-    zypper in -y kbd
-
-    if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "kbd package has been installed successfully."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install kbd package. This is a finding."
     fi
 }
 
@@ -1696,16 +1666,23 @@ disable_interactive_shell_noninteractive_accounts() {
     local vuln_id="V-261358"
     local rule_id="SV-261358r996829"
 
+    # Find accounts with /bin/bash but should not have an interactive shell
     local noninteractive_accounts
-    noninteractive_accounts=$(awk -F: '($3 >= 1000 && $7 == "/bin/bash") {print $1}' /etc/passwd)
+    noninteractive_accounts=$(awk -F: '($3 >= 100 && $7 == "/bin/bash") {print $1}' /etc/passwd)
 
     for account in $noninteractive_accounts; do
-        usermod --shell /sbin/nologin "$account"
-
-        if [[ $? -eq 0 ]]; then
-            log_message "$function_name" "$vuln_id" "$rule_id" "Interactive shell disabled for noninteractive account $account."
+        # Skip interactive users by checking home directories and known user groups
+        # You can modify the user groups here in the `grep -qE "()"`
+        if [[ -d "/home/$account" ]] || id -nG "$account" | grep -qE "(wheel|users)"; then
+            log_message "$function_name" "$vuln_id" "$rule_id" "Skipping user account $account (interactive user)."
         else
-            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable interactive shell for noninteractive account $account. This is a finding."
+            usermod --shell /sbin/nologin "$account"
+
+            if [[ $? -eq 0 ]]; then
+                log_message "$function_name" "$vuln_id" "$rule_id" "Interactive shell disabled for noninteractive account $account."
+            else
+                log_message "$function_name" "$vuln_id" "$rule_id" "Failed to disable interactive shell for noninteractive account $account. This is a finding."
+            fi
         fi
     done
 }
@@ -2306,24 +2283,6 @@ configure_max_password_age() {
     fi
 }
 
-# Function to implement multifactor authentication by installing required packages
-install_mfa_packages() {
-    local function_name="install_mfa_packages"
-    local vuln_id="V-261396"
-    local rule_id="SV-261396r996610"
-
-    local packages=("pam_pkcs11" "mozilla-nss" "mozilla-nss-tools" "pcsc-ccid" "pcsc-lite" "pcsc-tools" "opensc" "coolkey")
-
-    for package in "${packages[@]}"; do
-        zypper in -y "$package"
-        if [[ $? -eq 0 ]]; then
-            log_message "$function_name" "$vuln_id" "$rule_id" "Installed package $package successfully."
-        else
-            log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install package $package. This is a finding."
-        fi
-    done
-}
-
 # Function to implement multifactor authentication for remote access to privileged accounts via PAM
 configure_mfa_pam() {
     local function_name="configure_mfa_pam"
@@ -2447,18 +2406,10 @@ copy_pam_config_files() {
     fi
 }
 
-install_aide() {
-    local function_name="install_aide"
+configure_aide() {
+    local function_name="configure_aide"
     local vuln_id="V-261403"
     local rule_id="SV-261403r996627"
-
-    zypper in -y aide
-    if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Installed AIDE successfully."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install AIDE. This is a finding."
-        return
-    fi
 
     aide -i
     if [[ $? -eq 0 ]]; then
@@ -2613,19 +2564,6 @@ configure_syslog_ng() {
     fi
 }
 
-install_audit_package() {
-    local function_name="install_audit_package"
-    local vuln_id="V-261410"
-    local rule_id="SV-261410r996645"
-
-    zypper in -y audit
-    if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Installed audit package successfully."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install audit package. This is a finding."
-    fi
-}
-
 enable_auditd_service() {
     local function_name="enable_auditd_service"
     local vuln_id="V-261411"
@@ -2641,18 +2579,10 @@ enable_auditd_service() {
     fi
 }
 
-install_audit_audispd_plugins() {
-    local function_name="install_audit_audispd_plugins"
+configure_audit_audispd_plugins() {
+    local function_name="configure_audit_audispd_plugins"
     local vuln_id="V-261412"
     local rule_id="SV-261412r996649"
-
-    zypper in -y audit-audispd-plugins
-    if [[ $? -eq 0 ]]; then
-        log_message "$function_name" "$vuln_id" "$rule_id" "Installed audit-audispd-plugins package successfully."
-    else
-        log_message "$function_name" "$vuln_id" "$rule_id" "Failed to install audit-audispd-plugins package. This is a finding."
-        return
-    fi
 
     local au_remote_conf="/etc/audisp/plugins.d/au-remote.conf"
     local active_setting="active = yes"
@@ -3986,9 +3916,7 @@ restrict_kernel_message_buffer
 disable_kdump_service
 configure_aslr
 configure_kernel_address_leak_prevention
-install_slem_patches
 configure_remove_outdated_software
-install_kbd_package
 configure_fstab_nosuid_nfs
 configure_fstab_noexec_nfs
 configure_fstab_nosuid_removable_media
@@ -4082,23 +4010,21 @@ create_password_history_file
 configure_encrypt_method
 configure_min_password_age
 configure_max_password_age
-install_mfa_packages
 configure_mfa_pam
 enable_cert_status_checking
 configure_nss_cache_timeout
 configure_pam_cache_timeout
 validate_pki_certificates
 copy_pam_config_files
-install_aide
+configure_aide
 configure_aide_acls
 configure_aide_xattrs
 configure_aide_audit_tools
 configure_weekly_aide_check
 configure_daily_aide_check
 configure_syslog_ng
-install_audit_package
 enable_auditd_service
-install_audit_audispd_plugins
+configure_audit_audispd_plugins
 configure_audit_storage_notification
 configure_audit_failure_action
 configure_network_failure_action

@@ -70,7 +70,7 @@ check_encrypted_root_password() {
     local function_name="check_encrypted_root_password"
     local vuln_id="V-261267"
     local rule_id="SV-261267r996295"
-    
+
     if [[ -d /sys/firmware/efi ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System uses EFI, BIOS requirement is not applicable."
         return
@@ -91,7 +91,7 @@ configure_boot_password_encryption() {
     local function_name="configure_boot_password_encryption"
     local vuln_id="V-261268"
     local rule_id="SV-261268r996298"
-    
+
     if [[ ! -d /sys/firmware/efi ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "System does not use UEFI, requirement is not applicable."
         return
@@ -154,8 +154,8 @@ verify_telnet_server_not_installed() {
     local vuln_id="V-261277"
     local rule_id="SV-261277r996318"
 
-    if zypper se telnet-server | grep -q "Installed"; then
-        zypper remove -y telnet-server
+    if zypper se -i telnet-server | grep -q "Installed"; then
+        transactional-update pkg remove telnet-server
         if zypper se telnet-server | grep -q "Installed"; then
             log_message "$function_name" "$vuln_id" "$rule_id" "telnet-server package is installed and could not be removed. This is a finding."
         else
@@ -189,7 +189,7 @@ verify_disk_encryption_and_fips_mode() {
                 missing_crypttab_entries+="$uuid "
             fi
         done
-        
+
         if [[ -n "$missing_crypttab_entries" ]]; then
             log_message "$function_name" "$vuln_id" "$rule_id" "Missing entries in /etc/crypttab for UUIDs: $missing_crypttab_entries. This is a finding."
         else
@@ -213,19 +213,10 @@ verify_ssh_package_installed() {
     local vuln_id="V-261327"
     local rule_id="SV-261327r996450"
 
-    local openssh_installed
-    openssh_installed=$(zypper info openssh | awk -F ': ' '/Installed/ && !/Size/ {print $2}')
-
-    if [[ "$openssh_installed" == "Yes" ]]; then
+    if zypper se -i openssh | grep "^i"; then
         log_message "$function_name" "$vuln_id" "$rule_id" "openssh package is installed."
     else
-        zypper install -y openssh
-        openssh_installed=$(zypper info openssh | grep -i "Installed" | awk '{print $3}')
-        if [[ "$openssh_installed" == "Yes" ]]; then
-            log_message "$function_name" "$vuln_id" "$rule_id" "openssh package was not installed but has been installed successfully."
-        else
-            log_message "$function_name" "$vuln_id" "$rule_id" "openssh package is not installed and could not be installed. This is a finding."
-        fi
+        log_message "$function_name" "$vuln_id" "$rule_id" "openssh package is not installed. This is a finding."
     fi
 }
 
@@ -275,7 +266,7 @@ configure_ssh_no_unattended_logon() {
     local sshd_config_file="/etc/ssh/sshd_config"
     local permit_empty_passwords="PermitEmptyPasswords no"
     local permit_user_environment="PermitUserEnvironment no"
-    
+
     if grep -q "^PermitEmptyPasswords" "$sshd_config_file"; then
         sed -i 's/^PermitEmptyPasswords.*/PermitEmptyPasswords no/' "$sshd_config_file"
     else
@@ -289,12 +280,12 @@ configure_ssh_no_unattended_logon() {
     fi
 
     systemctl restart sshd.service
-    
+
     local permit_empty_passwords_applied
     local permit_user_environment_applied
     permit_empty_passwords_applied=$(grep "^PermitEmptyPasswords no" "$sshd_config_file")
     permit_user_environment_applied=$(grep "^PermitUserEnvironment no" "$sshd_config_file")
-    
+
     if [[ -n "$permit_empty_passwords_applied" && -n "$permit_user_environment_applied" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "SSH configuration to disable unattended or automatic logon is correctly applied."
     else
@@ -309,7 +300,7 @@ configure_ssh_fips_approved_ciphers() {
 
     local sshd_config_file="/etc/ssh/sshd_config"
     local fips_ciphers="Ciphers aes256-ctr,aes192-ctr,aes128-ctr"
-    
+
     if grep -q "^Ciphers" "$sshd_config_file"; then
         sed -i 's/^Ciphers.*/'"$fips_ciphers"'/' "$sshd_config_file"
     else
@@ -317,10 +308,10 @@ configure_ssh_fips_approved_ciphers() {
     fi
 
     systemctl restart sshd.service
-    
+
     local ciphers_applied
     ciphers_applied=$(grep "^Ciphers" "$sshd_config_file")
-    
+
     if [[ "$ciphers_applied" == "$fips_ciphers" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "SSH server is configured to use only FIPS 140-2/140-3 approved ciphers."
     else
@@ -336,7 +327,7 @@ configure_ssh_fips_approved_macs() {
 
     local sshd_config_file="/etc/ssh/sshd_config"
     local fips_macs="MACs hmac-sha2-512,hmac-sha2-256"
-    
+
     if grep -q "^MACs" "$sshd_config_file"; then
         sed -i 's/^MACs.*/'"$fips_macs"'/' "$sshd_config_file"
     else
@@ -344,10 +335,10 @@ configure_ssh_fips_approved_macs() {
     fi
 
     systemctl restart sshd.service
-    
+
     local macs_applied
     macs_applied=$(grep "^MACs" "$sshd_config_file")
-    
+
     if [[ "$macs_applied" == "$fips_macs" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "SSH daemon is configured to use only FIPS 140-2/140-3 approved MACs."
     else
@@ -363,7 +354,7 @@ configure_ssh_fips_approved_kex_algorithms() {
 
     local sshd_config_file="/etc/ssh/sshd_config"
     local fips_kex_algorithms="KexAlgorithms ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256"
-    
+
     if grep -q "^KexAlgorithms" "$sshd_config_file"; then
         sed -i 's/^KexAlgorithms.*/'"$fips_kex_algorithms"'/' "$sshd_config_file"
     else
@@ -371,10 +362,10 @@ configure_ssh_fips_approved_kex_algorithms() {
     fi
 
     systemctl restart sshd.service
-    
+
     local kex_algorithms_applied
     kex_algorithms_applied=$(grep "^KexAlgorithms" "$sshd_config_file")
-    
+
     if [[ "$kex_algorithms_applied" == "$fips_kex_algorithms" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "SSH server is configured to use only FIPS 140-2/140-3 validated key exchange algorithms."
     else
@@ -445,7 +436,7 @@ configure_gui_no_unattended_logon() {
     local displaymanager_config_file="/etc/sysconfig/displaymanager"
     local autologin_setting="DISPLAYMANAGER_AUTOLOGIN=\"\""
     local password_less_login_setting="DISPLAYMANAGER_PASSWORD_LESS_LOGIN=\"no\""
-    
+
     if [[ ! -f "$displaymanager_config_file" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "/etc/sysconfig/displaymanager file does not exist. This requirement is not applicable."
         return
@@ -467,7 +458,7 @@ configure_gui_no_unattended_logon() {
     local password_less_login_applied
     autologin_applied=$(grep "^DISPLAYMANAGER_AUTOLOGIN" "$displaymanager_config_file")
     password_less_login_applied=$(grep "^DISPLAYMANAGER_PASSWORD_LESS_LOGIN" "$displaymanager_config_file")
-    
+
     if [[ "$autologin_applied" == "$autologin_setting" && "$password_less_login_applied" == "$password_less_login_setting" ]]; then
         log_message "$function_name" "$vuln_id" "$rule_id" "GUI configuration to disable unattended or automatic logon is correctly applied."
     else
@@ -634,7 +625,7 @@ configure_fips_mode() {
 
     local grub_cfg_file="/etc/default/grub"
     local kernel_params="fips=1"
-    
+
     local fips_enabled
     fips_enabled=$(sysctl -a | grep -w "crypto.fips_enabled" | awk '{print $3}')
 

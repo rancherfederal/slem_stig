@@ -31,7 +31,9 @@ install_pkgs() {
 
     # Using a transactional shell to install packages in a single session
     transactional-update shell <<EOF
-    zypper --non-interactive install ${pkgs[@]}
+zypper -nq update 
+zypper -nq install ${pkgs[@]}
+exit
 EOF
 
     # Check if transactional shell executed successfully

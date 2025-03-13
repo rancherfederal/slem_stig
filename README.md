@@ -1,3 +1,5 @@
+# *** These scripts have been tested with SLE Micro 5.5 *** 12 Mar 2025
+
 # DISA STIG SLE Micro 5 v1r1 was released 20 June 2024
 
 To run a STIG script on SLE Micro since it is transactional, run `transactional-update run <script>`, reboot, and run the next.
@@ -13,6 +15,8 @@ stig_medium.sh: this script takes the data from DISA STIG SLE Micro 5 v1r1 for a
 stig_medium_user_input.sh: this script takes the data from DISA STIG SLE Micro 5 v1r1 for any "medium vulnerabilities" that requires customization on a per user/organizational use and applies the recommended fixes.
 
 stig_low.sh: this script takes the data from DISA STIG SLE Micro 5 v1r1 for any "low vulnerabilities" and applies the recommended fixes.
+
+stig_pkg_installs.sh: this script is where you place any packages that DISA STIG may require to be installed so that they can run as a single transaction.
 
 # Findings
 

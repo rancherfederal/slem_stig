@@ -1,8 +1,19 @@
-# *** These scripts have been tested with SLE Micro 5.5 *** 12 Mar 2025
+# 12 Mar 2025 *These scripts have been tested with SLE Micro 5.5*
 
 # DISA STIG SLE Micro 5 v1r1 was released 20 June 2024
 
 To run a STIG script on SLE Micro since it is transactional, run `transactional-update run <script>`, reboot, and run the next.
+
+Order to run the scripts
+1. stig_pkg_installs.sh
+2. security_hardening.sh
+3. stig_low.sh
+4. stig_med.sh
+5. stig_high.sh
+
+When running, check each file for potential settings that need exceptions and comment out the repsective function calls.
+Password encryption is set to SHA512, after running stig_high.sh make sure you reset passwords with passwd <user> before rebooting.
+There are still some minor findings, see below.
 
 ## Description of files
 
